@@ -362,7 +362,7 @@ class CarlaGame(object):
                         point_cloud = np.matmul(rotRP, point_cloud.T).T
                     self._update_agent_location()
                     # Save screen, lidar and kitti training labels together with calibration and groundplane files
-                    self._save_training_files(datapoints, point_cloud)
+                    self._save_training_files(datapoints, point_cloud, self._lidar_measurement)
                     self.captured_frame_no += 1
                     self._captured_frames_since_restart += 1
                     self._frames_since_last_capture = 0
@@ -404,7 +404,7 @@ class CarlaGame(object):
 
         return image, datapoints
 
-    def _save_training_files(self, datapoints, point_cloud):
+    def _save_training_files(self, datapoints, point_cloud, lidar_measurement):
         logging.info("Attempting to save at timer step {}, frame no: {}".format(
             self._timer.step, self.captured_frame_no))
         groundplane_fname = GROUNDPLANE_PATH.format(self.captured_frame_no)
@@ -419,7 +419,7 @@ class CarlaGame(object):
         save_image_data(
             img_fname, image_converter.to_rgb_array(self._main_image))
         save_kitti_data(kitti_fname, datapoints)
-        save_lidar_data(lidar_fname, point_cloud,
+        save_lidar_data(lidar_fname, point_cloud, lidar_measurement,
                         LIDAR_HEIGHT_POS, LIDAR_DATA_FORMAT)
         save_calibration_matrices(
             calib_filename, self._intrinsic, self._extrinsic)

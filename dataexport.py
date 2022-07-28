@@ -50,8 +50,8 @@ def save_image_data(filename, image):
     color_fmt = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     cv2.imwrite(filename, color_fmt)
 
-
-def save_lidar_data(filename, point_cloud, LIDAR_HEIGHT, format="bin"):
+# add lidara_measurement , jwang
+def save_lidar_data(filename, point_cloud, lidar_measurement, LIDAR_HEIGHT, format="bin"):
     """ Saves lidar data to given filename, according to the lidar data format.
         bin is used for KITTI-data format, while .ply is the regular point cloud format
         In Unreal, the coordinate system of the engine is defined as, which is the same as the lidar points
@@ -77,6 +77,8 @@ def save_lidar_data(filename, point_cloud, LIDAR_HEIGHT, format="bin"):
         NOTE: We do not flip the coordinate system when saving to .ply.
     """
     logging.info("Wrote lidar data to %s", filename)
+    print("Wrote lidar data to %s", filename)
+
 
     if format == "bin":
         lidar_array = [[point[0], -point[1], point[2], 1.0]
@@ -89,6 +91,7 @@ def save_lidar_data(filename, point_cloud, LIDAR_HEIGHT, format="bin"):
         logging.debug("Lidar min/max of z: {} {}".format(
                       lidar_array[:, 2].min(), lidar_array[:, 0].max()))
         lidar_array.tofile(filename)
+        lidar_measurement.point_cloud.save_to_disk(filename+'.ply')
     else:
         lidar_measurement.point_cloud.save_to_disk(filename)
 

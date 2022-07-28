@@ -2,7 +2,7 @@
 GEN_DATA = True  # Whether or not to save training data
 VISUALIZE_LIDAR = False
 # How many frames to wait between each capture of screen, bounding boxes and lidar
-STEPS_BETWEEN_RECORDINGS = 10
+STEPS_BETWEEN_RECORDINGS = 2
 CLASSES_TO_LABEL = ["Vehicle"]  # , "Pedestrian"]
 # Lidar can be saved in bin to comply to kitti, or the standard .ply format
 LIDAR_DATA_FORMAT = "bin"
@@ -11,7 +11,7 @@ assert LIDAR_DATA_FORMAT in [
 OCCLUDED_VERTEX_COLOR = (255, 0, 0)
 VISIBLE_VERTEX_COLOR = (0, 255, 0)
 # How many meters the car must drive before a new capture is triggered.
-DISTANCE_SINCE_LAST_RECORDING = 10
+DISTANCE_SINCE_LAST_RECORDING = 2
 # How many datapoints to record before resetting the scene.
 NUM_RECORDINGS_BEFORE_RESET = 20
 # How many frames to render before resetting the environment
