@@ -171,7 +171,7 @@ class CarlaGame(object):
 
     def _on_new_episode(self):
         self._carla_settings.randomize_seeds()
-        self._carla_settings.randomize_weather()
+        #self._carla_settings.randomize_weather()
         scene = self.client.load_settings(self._carla_settings)
         number_of_player_starts = len(scene.player_start_spots)
         player_start = np.random.randint(number_of_player_starts)
@@ -275,6 +275,7 @@ class CarlaGame(object):
             image = image_converter.to_rgb_array(self._main_image)
 
             # Retrieve and draw datapoints
+            print('generate_datapoints')
             image, datapoints = self._generate_datapoints(image)
 
             # Draw lidar
@@ -327,8 +328,11 @@ class CarlaGame(object):
             distance_driven = self._distance_since_last_recording()
             #print("Distance driven since last recording: {}".format(distance_driven))
             has_driven_long_enough = distance_driven is None or distance_driven > DISTANCE_SINCE_LAST_RECORDING
+            print('timer: ', self._timer.step)
             if (self._timer.step + 1) % STEPS_BETWEEN_RECORDINGS == 0:
+                print('drive dist: ', distance_driven)
                 if has_driven_long_enough and datapoints:
+                    print('drive long enough: ')
                     # Avoid doing this twice or unnecessarily often
                     if not VISUALIZE_LIDAR:
                         # Calculation to shift bboxes relative to pitch and roll of player
@@ -402,6 +406,7 @@ class CarlaGame(object):
                 if kitti_datapoint:
                     datapoints.append(kitti_datapoint)
 
+        print('datapoints # objs: ', type(image), type(datapoints), len(image), len(datapoints))
         return image, datapoints
 
     def _save_training_files(self, datapoints, point_cloud, lidar_measurement):
@@ -452,6 +457,8 @@ class CarlaGame(object):
 def should_detect_class(agent):
     """ Returns true if the agent is of the classes that we want to detect.
         Note that Carla has class types in lowercase """
+    if agent.HasField('pedestrian'):
+        print('see a pedestrain')
     return True in [agent.HasField(class_type.lower()) for class_type in CLASSES_TO_LABEL]
 
 

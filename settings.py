@@ -16,7 +16,8 @@ def make_carla_settings(args):
         SendNonPlayerAgentsInfo=True,
         NumberOfVehicles=NUM_VEHICLES,
         NumberOfPedestrians=NUM_PEDESTRIANS,
-        WeatherId=random.choice([1, 3, 7, 8, 14]),
+    #    WeatherId=random.choice([1, 3, 7, 8, 14]), #3,8 dry, 7 rain, 14 rain
+        WeatherId=8,
         QualityLevel=args.quality_level)
     settings.randomize_seeds()
     camera0 = sensor.Camera('CameraRGB')
