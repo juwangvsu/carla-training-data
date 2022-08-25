@@ -2,6 +2,16 @@
 	arldell
 	newamdpc
 
+----------- 9.13 config.py ex ------------------------
+config.py control game runtime stuff:
+
+python config.py --host arldell --list
+	this list options such as weather type
+python config.py --host arldell --weather ClearNoon
+	this change the game with ClearNoon weather
+python config.py --host arldell --map Town03
+	change the map of the curr game
+
 ----------------------8/18/22 python-pcl ----------------
 using python-pcl to visualize the result:
 	python-pcl install using the whl build from source
