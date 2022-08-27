@@ -12,6 +12,13 @@ python config.py --host arldell --weather ClearNoon
 python config.py --host arldell --map Town03
 	change the map of the curr game
 
+python manual_control.py --host arldell --res 1238x374 -w 20 -n 0
+	TAB switch cam position
+	-h display actors info
+	-w walker#
+	-n veh#
+	
+
 ----------------------8/18/22 python-pcl ----------------
 using python-pcl to visualize the result:
 	python-pcl install using the whl build from source

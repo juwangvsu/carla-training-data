@@ -92,9 +92,7 @@ import math
 import random
 import re
 import weakref
-from populate import populate_veh, populate_walkers
-import numpy
-import numpy.random
+
 try:
     import pygame
     from pygame.locals import KMOD_CTRL
@@ -192,11 +190,8 @@ def get_actor_blueprints(world, filter, generation):
 
 
 class World(object):
-    def __init__(self, carla_world, hud, args, client, traffic_manager):
+    def __init__(self, carla_world, hud, args):
         self.world = carla_world
-        self.client =client 
-        self.args =args 
-        self.traffic_manager = traffic_manager 
         self.sync = args.sync
         self.actor_role_name = args.rolename
         try:
@@ -267,16 +262,10 @@ class World(object):
         if self.player is not None:
             spawn_point = self.player.get_transform()
             spawn_point.location.z += 2.0
-            #x=213.880447, y=59.902679, z=0.300000
-            spawn_point.location.x = 213.88
-            spawn_point.location.y = 59.90
-            spawn_point.location.z = 0.3
             spawn_point.rotation.roll = 0.0
             spawn_point.rotation.pitch = 0.0
-            spawn_point.rotation.yaw = 0 
             self.destroy()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-            print('vehicle spawn pos init: ', spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
         while self.player is None:
@@ -286,15 +275,7 @@ class World(object):
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
             spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
-            #spawn_point = self.player.get_transform()
-            spawn_point.location.x = 213.88
-            spawn_point.location.y = 59.90
-            spawn_point.location.z = 0.3
-            spawn_point.rotation.roll = 0.0
-            spawn_point.rotation.pitch = 0.0
-            spawn_point.rotation.yaw = 0 
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-            print('vehicle spawn pos: ', spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
         # Set up the sensors.
@@ -308,32 +289,10 @@ class World(object):
         actor_type = get_actor_display_name(self.player)
         self.hud.notification(actor_type)
 
-        synchronous_master = False
-        settings = self.world.get_settings()
-  #      if not self.args.asynch:
-  #          self.traffic_manager.set_synchronous_mode(True)
-  #          if not settings.synchronous_mode:
-  #              synchronous_master = True
-  #              settings.synchronous_mode = True
-  #              settings.fixed_delta_seconds = 0.05
-  #          else:
-  #              synchronous_master = False
-
-        vehicles_list=populate_veh(self.client, self.world, self.traffic_manager, self.args.filterv, self.args.generationv, self.args.number_of_vehicles,synchronous_master)
-        # blueprintsWalkers = get_actor_blueprints(world, args.filterw, args.generationw)
-        walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, self.args.number_of_walkers, self.args.seedw, synchronous_master, playerlocation=None)
-        #walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, 5, self.args.seedw, synchronous_master, playerlocation=spawn_point)
-
         if self.sync:
             self.world.tick()
         else:
             self.world.wait_for_tick()
-
-    def testinfo(self):
-        vehicles = self.world.get_actors().filter('vehicle.*')
-        print('testinfo veh: ', vehicles)
-        walkers = self.world.get_actors().filter('walker.*')
-        print('testinfo walkers: ', walkers)
 
     def next_weather(self, reverse=False):
         self._weather_index += -1 if reverse else 1
@@ -400,10 +359,6 @@ class World(object):
                 sensor.destroy()
         if self.player is not None:
             self.player.destroy()
-        vehicles = self.world.get_actors().filter('vehicle.*')
-        self.client.apply_batch([carla.command.DestroyActor(x) for x in vehicles])
-        walkers = self.world.get_actors().filter('walker.*')
-        self.client.apply_batch([carla.command.DestroyActor(x) for x in walkers])
 
 
 # ==============================================================================
@@ -457,7 +412,6 @@ class KeyboardControl(object):
                     world.load_map_layer()
                 elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
                     world.hud.help.toggle()
-                    world.testinfo()
                 elif event.key == K_TAB:
                     world.camera_manager.toggle_camera()
                 elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
@@ -1084,8 +1038,8 @@ class CameraManager(object):
 
         if not self._parent.type_id.startswith("walker.pedestrian"):
             self._camera_transforms = [
-                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
                 (carla.Transform(carla.Location(x=-2.0*bound_x, y=+0.0*bound_y, z=2.0*bound_z), carla.Rotation(pitch=8.0)), Attachment.SpringArm),
+                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
                 (carla.Transform(carla.Location(x=+1.9*bound_x, y=+1.0*bound_y, z=1.2*bound_z)), Attachment.SpringArm),
                 (carla.Transform(carla.Location(x=-2.8*bound_x, y=+0.0*bound_y, z=4.6*bound_z), carla.Rotation(pitch=6.0)), Attachment.SpringArm),
                 (carla.Transform(carla.Location(x=-1.0, y=-1.0*bound_y, z=0.4*bound_z)), Attachment.Rigid)]
@@ -1233,7 +1187,6 @@ def game_loop(args):
     try:
         client = carla.Client(args.host, args.port)
         client.set_timeout(20.0)
-        traffic_manager = client.get_trafficmanager()
 
         sim_world = client.get_world()
         if args.sync:
@@ -1250,12 +1203,6 @@ def game_loop(args):
         if args.autopilot and not sim_world.get_settings().synchronous_mode:
             print("WARNING: You are currently in asynchronous mode and could "
                   "experience some issues with the traffic simulation")
-        if args.weather is not None:
-            if not hasattr(carla.WeatherParameters, args.weather):
-                print('ERROR: weather preset %r not found.' % args.weather)
-            else:
-                print('set weather preset %r.' % args.weather)
-                sim_world.set_weather(getattr(carla.WeatherParameters, args.weather))
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -1264,7 +1211,7 @@ def game_loop(args):
         pygame.display.flip()
 
         hud = HUD(args.width, args.height)
-        world = World(sim_world, hud, args, client, traffic_manager)
+        world = World(sim_world, hud, args)
         controller = KeyboardControl(world, args.autopilot)
 
         if args.sync:
@@ -1322,11 +1269,6 @@ def main():
         type=int,
         help='TCP port to listen to (default: 2000)')
     argparser.add_argument(
-        '--asynch',
-        action='store_true',
-        help='Activate asynchronous mode execution')
-
-    argparser.add_argument(
         '-a', '--autopilot',
         action='store_true',
         help='enable autopilot')
@@ -1359,50 +1301,6 @@ def main():
         '--sync',
         action='store_true',
         help='Activate synchronous mode execution')
-    argparser.add_argument(
-        '--filterv',
-        metavar='PATTERN',
-        default='vehicle.*',
-        help='Filter vehicle model (default: "vehicle.*")')
-    argparser.add_argument(
-        '--generationv',
-        metavar='G',
-        default='All',
-        help='restrict to certain vehicle generation (values: "1","2","All" - default: "All")')
-    argparser.add_argument(
-        '--filterw',
-        metavar='PATTERN',
-        default='walker.pedestrian.*',
-        help='Filter pedestrian type (default: "walker.pedestrian.*")')
-    argparser.add_argument(
-        '--generationw',
-        metavar='G',
-        default='2',
-        help='restrict to certain pedestrian generation (values: "1","2","All" - default: "2")')
-    argparser.add_argument(
-        '-n', '--number-of-vehicles',
-        metavar='N',
-        default=30,
-        type=int,
-        help='Number of vehicles (default: 30)')
-    argparser.add_argument(
-        '-w', '--number-of-walkers',
-        metavar='W',
-        default=10,
-        type=int,
-        help='Number of walkers (default: 10)')
-    argparser.add_argument(
-        '--seedw',
-        metavar='S',
-        default=0,
-        type=int,
-        help='Set the seed for pedestrians module')
-    argparser.add_argument(
-        '--weather',
-        help='set weather preset, use --list to see available presets')
-
-
-
     args = argparser.parse_args()
 
     args.width, args.height = [int(x) for x in args.res.split('x')]
