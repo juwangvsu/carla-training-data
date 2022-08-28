@@ -72,6 +72,30 @@ def list_blueprints(world, bp_filter):
     print('')
 
 
+
+def clean_vehs(args, client):
+    address = '%s:%d' % (get_ip(args.host), args.port)
+
+    world = client.get_world()
+    elapsed_time = world.get_snapshot().timestamp.elapsed_seconds
+    elapsed_time = datetime.timedelta(seconds=int(elapsed_time))
+
+    actors = world.get_actors()
+    s = world.get_settings()
+
+    weather = 'Custom'
+    current_weather = world.get_weather()
+    for preset, name in find_weather_presets():
+        if current_weather == preset:
+            weather = name
+
+    vehs= actors.filter('vehicle.*')
+    client.apply_batch([carla.command.DestroyActor(x) for x in vehs])
+    print(vehs)
+    sensors= actors.filter('sensor.*')
+    print(sensors)
+    client.apply_batch([carla.command.DestroyActor(x) for x in sensors])
+
 def inspect(args, client):
     address = '%s:%d' % (get_ip(args.host), args.port)
 
@@ -80,6 +104,7 @@ def inspect(args, client):
     elapsed_time = datetime.timedelta(seconds=int(elapsed_time))
 
     actors = world.get_actors()
+
     s = world.get_settings()
 
     weather = 'Custom'
@@ -110,7 +135,18 @@ def inspect(args, client):
     print('  * traffic:  % 20d' % len(actors.filter('traffic.*')))
     print('  * vehicles: % 20d' % len(actors.filter('vehicle.*')))
     print('  * walkers:  % 20d' % len(actors.filter('walker.*')))
+    print('  * sensors:  % 20d' % len(actors.filter('sensor.*')))
     print('-' * 34)
+    vehs= actors.filter('vehicle.*')
+    print(vehs)
+    sensors= actors.filter('sensor.*')
+    print(sensors)
+    spectator = world.get_spectator()
+    print('spectator: ', spectator)
+    spec_trans = vehs[0].get_transform()
+    spec_trans.location.z += 5
+    spectator.set_transform(spec_trans)
+    #spectator.set_transform(vehs[0].get_transform())
 
 
 def main():
@@ -167,6 +203,11 @@ def main():
         '-i', '--inspect',
         action='store_true',
         help='inspect simulation')
+    argparser.add_argument(
+        '-ic', '--insclean',
+        action='store_true',
+        help='inspect and clean simulation')
+
     argparser.add_argument(
         '-l', '--list',
         action='store_true',
@@ -309,6 +350,8 @@ def main():
 
     if args.inspect:
         inspect(args, client)
+    if args.insclean:
+        clean_vehs(args, client)
     if args.list:
         list_options(client)
     if args.list_blueprints:

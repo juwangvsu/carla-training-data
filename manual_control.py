@@ -92,7 +92,7 @@ import math
 import random
 import re
 import weakref
-from populate import populate_veh, populate_walkers
+from populate import populate_veh, populate_walkers, populate_walkers_fromfile
 import numpy
 import numpy.random
 try:
@@ -190,6 +190,7 @@ def get_actor_blueprints(world, filter, generation):
 # -- World ---------------------------------------------------------------------
 # ==============================================================================
 
+from config import clean_vehs
 
 class World(object):
     def __init__(self, carla_world, hud, args, client, traffic_manager):
@@ -199,6 +200,8 @@ class World(object):
         self.traffic_manager = traffic_manager 
         self.sync = args.sync
         self.actor_role_name = args.rolename
+        if args.ic:
+            clean_vehs(args, client)
         try:
             self.map = self.world.get_map()
         except RuntimeError as error:
@@ -321,8 +324,18 @@ class World(object):
 
         vehicles_list=populate_veh(self.client, self.world, self.traffic_manager, self.args.filterv, self.args.generationv, self.args.number_of_vehicles,synchronous_master)
         # blueprintsWalkers = get_actor_blueprints(world, args.filterw, args.generationw)
-        walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, self.args.number_of_walkers, self.args.seedw, synchronous_master, playerlocation=None)
-        #walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, 5, self.args.seedw, synchronous_master, playerlocation=spawn_point)
+        #walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, self.args.number_of_walkers, self.args.seedw, synchronous_master, playerlocation=None)
+        walkers_list = populate_walkers(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, 10, self.args.seedw, synchronous_master, playerlocation=spawn_point)
+        print('walkers list:', walkers_list)
+
+        populate_walkers_fromfile(self.client, self.world, self.traffic_manager, self.args.filterw, self.args.generationw, self.args.asynch, 10, self.args.seedw, synchronous_master, playerlocation=spawn_point)
+
+        spectator = self.world.get_spectator()
+        print('spectator: ', spectator)
+        spec_trans = self.player.get_transform()
+        spec_trans.location.z += 5
+        spectator.set_transform(spec_trans)
+
 
         if self.sync:
             self.world.tick()
@@ -1231,6 +1244,7 @@ def game_loop(args):
     original_settings = None
 
     try:
+        print('connecting to ...', args.host, args.port)
         client = carla.Client(args.host, args.port)
         client.set_timeout(20.0)
         traffic_manager = client.get_trafficmanager()
@@ -1325,6 +1339,10 @@ def main():
         '--asynch',
         action='store_true',
         help='Activate asynchronous mode execution')
+    argparser.add_argument(
+        '--ic',
+        action='store_true',
+        help='clean previous vehicles and sensor')
 
     argparser.add_argument(
         '-a', '--autopilot',

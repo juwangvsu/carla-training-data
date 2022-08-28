@@ -11,6 +11,8 @@ python config.py --host arldell --weather ClearNoon
 	this change the game with ClearNoon weather
 python config.py --host arldell --map Town03
 	change the map of the curr game
+python config.py --host arldell -i
+	inspect current game info
 
 python manual_control.py --host arldell --res 1238x374 -w 20 -n 0
 	TAB switch cam position
