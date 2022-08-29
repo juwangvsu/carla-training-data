@@ -1,5 +1,6 @@
+#!/usr/bin/env python3
 #!/usr/bin/env python
-# 8/25/22v 
+# 8/25/22v
 # this file is to be the reimplementation of the originial datageneration.py,
 # but use carla 9.13 pythonapi, using example code from manuel_control.py
 # generate_traffic.py
@@ -11,61 +12,474 @@
 # This work is licensed under the terms of the MIT license.
 # For a copy, see <https://opensource.org/licenses/MIT>.
 
-"""Example script to generate traffic in the simulation"""
 
-import glob
-import os
-import sys
-import time
 
-try:
-    sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
-        sys.version_info.major,
-        sys.version_info.minor,
-        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
-except IndexError:
-    pass
+"""
+Welcome to CARLA manual control.
 
-import carla
+Use ARROWS or WASD keys for control.
 
-from carla import VehicleLightState as vls
+    W            : throttle
+    S            : brake
+    AD           : steer
+    Q            : toggle reverse
+    Space        : hand-brake
+    P            : toggle autopilot
+
+    R            : restart level
+
+STARTING in a moment...
+"""
 
 import argparse
+import cv2
 import logging
-from numpy import random
+import random
+import time
+import math
+import colorsys
+import os
 
-def get_actor_blueprints(world, filter, generation):
-    bps = world.get_blueprint_library().filter(filter)
+try:
+    import pygame
+except ImportError:
+    raise RuntimeError(
+        'cannot import pygame, make sure pygame package is installed')
 
-    if generation.lower() == "all":
-        return bps
+try:
+    import numpy as np
+    from numpy.linalg import pinv, inv
+except ImportError:
+    raise RuntimeError(
+        'cannot import numpy, make sure numpy package is installed')
 
-    # If the filter returns only one bp, we assume that this one needed
-    # and therefore, we ignore the generation
-    if len(bps) == 1:
-        return bps
+from carla import image_converter
+from carla.client import make_carla_client, VehicleControl
+from carla.planner.map import CarlaMap
+from carla.tcp import TCPConnectionError
+from carla.transform import Transform, Scale
 
-    try:
-        int_generation = int(generation)
-        # Check if generation is in available generations
-        if int_generation in [1, 2]:
-            bps = [x for x in bps if int(x.get_attribute('generation')) == int_generation]
-            return bps
+from utils import Timer, rand_color, vector3d_to_array, degrees_to_radians
+from datadescriptor import KittiDescriptor
+from dataexport import *
+from bounding_box import create_kitti_datapoint
+from carla_utils import KeyboardHelper, MeasurementsDisplayHelper
+from constants import *
+from settings import make_carla_settings
+import lidar_utils  # from lidar_utils import project_point_cloud
+import time
+from math import cos, sin
+
+""" OUTPUT FOLDER GENERATION """
+PHASE = "training"
+OUTPUT_FOLDER = os.path.join("_out", PHASE)
+folders = ['calib', 'image_2', 'label_2', 'velodyne', 'planes']
+
+
+def maybe_create_dir(path):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+
+for folder in folders:
+    directory = os.path.join(OUTPUT_FOLDER, folder)
+    maybe_create_dir(directory)
+
+""" DATA SAVE PATHS """
+GROUNDPLANE_PATH = os.path.join(OUTPUT_FOLDER, 'planes/{0:06}.txt')
+LIDAR_PATH = os.path.join(OUTPUT_FOLDER, 'velodyne/{0:06}.bin')
+LABEL_PATH = os.path.join(OUTPUT_FOLDER, 'label_2/{0:06}.txt')
+IMAGE_PATH = os.path.join(OUTPUT_FOLDER, 'image_2/{0:06}.png')
+CALIBRATION_PATH = os.path.join(OUTPUT_FOLDER, 'calib/{0:06}.txt')
+
+
+class CarlaGame(object):
+    def __init__(self, carla_client, args):
+        self.client = carla_client
+        self._carla_settings, self._intrinsic, self._camera_to_car_transform, self._lidar_to_car_transform = make_carla_settings(
+            args)
+        self._timer = None
+        self._display = None
+        self._main_image = None
+        self._mini_view_image1 = None
+        self._mini_view_image2 = None
+        self._enable_autopilot = args.autopilot
+        self._lidar_measurement = None
+        self._map_view = None
+        self._is_on_reverse = False
+        self._city_name = args.map_name
+        self._map = CarlaMap(self._city_name, 16.43,
+                             50.0) if self._city_name is not None else None
+        self._map_shape = self._map.map_image.shape if self._city_name is not None else None
+        self._map_view = self._map.get_map(
+            WINDOW_HEIGHT) if self._city_name is not None else None
+        self._position = None
+        self._agent_positions = None
+        self.captured_frame_no = self.current_captured_frame_num()
+        self._measurements = None
+        self._extrinsic = None
+        # To keep track of how far the car has driven since the last capture of data
+        self._agent_location_on_last_capture = None
+        self._frames_since_last_capture = 0
+        # How many frames we have captured since reset
+        self._captured_frames_since_restart = 0
+
+    def current_captured_frame_num(self):
+        # Figures out which frame number we currently are on
+        # This is run once, when we start the simulator in case we already have a dataset.
+        # The user can then choose to overwrite or append to the dataset.
+        label_path = os.path.join(OUTPUT_FOLDER, 'label_2/')
+        num_existing_data_files = len(
+            [name for name in os.listdir(label_path) if name.endswith('.txt')])
+        print(num_existing_data_files)
+        if num_existing_data_files == 0:
+            return 0
+        answer = input(
+            "There already exists a dataset in {}. Would you like to (O)verwrite or (A)ppend the dataset? (O/A)".format(OUTPUT_FOLDER))
+        if answer.upper() == "O":
+            logging.info(
+                "Resetting frame number to 0 and overwriting existing")
+            # Overwrite the data
+            return 0
+        logging.info("Continuing recording data on frame number {}".format(
+            num_existing_data_files))
+        return num_existing_data_files
+
+    def execute(self):
+        """Launch the PyGame."""
+        pygame.init()
+        self._initialize_game()
+        try:
+            while True:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        return
+                reset = self._on_loop()
+                if not reset:
+                    self._on_render()
+        finally:
+            pygame.quit()
+
+    def _initialize_game(self):
+        if self._city_name is not None:
+            self._display = pygame.display.set_mode(
+                (WINDOW_WIDTH + int((WINDOW_HEIGHT /
+                                     float(self._map.map_image.shape[0]))*self._map.map_image.shape[1]), WINDOW_HEIGHT),
+                pygame.HWSURFACE | pygame.DOUBLEBUF)
         else:
-            print("   Warning! Actor Generation is not valid. No actor will be spawned.")
-            return []
-    except:
-        print("   Warning! Actor Generation is not valid. No actor will be spawned.")
-        return []
+            self._display = pygame.display.set_mode(
+                (WINDOW_WIDTH, WINDOW_HEIGHT),
+                pygame.HWSURFACE | pygame.DOUBLEBUF)
 
-def main():
+        logging.debug('pygame started')
+        self._on_new_episode()
+
+    def _on_new_episode(self):
+        self._carla_settings.randomize_seeds()
+        #self._carla_settings.randomize_weather()
+        scene = self.client.load_settings(self._carla_settings)
+        number_of_player_starts = len(scene.player_start_spots)
+        player_start = np.random.randint(number_of_player_starts)
+        logging.info('Starting new episode...')
+        self.client.start_episode(player_start)
+        self._timer = Timer()
+        self._is_on_reverse = False
+
+        # Reset all tracking variables
+        self._agent_location_on_last_capture = None
+        self._frames_since_last_capture = 0
+        self._captured_frames_since_restart = 0
+
+    def _on_loop(self):
+        self._timer.tick()
+        measurements, sensor_data = self.client.read_data()
+        # logging.info("Frame no: {}, = {}".format(self.captured_frame_no,
+        #                                         (self.captured_frame_no + 1) % NUM_RECORDINGS_BEFORE_RESET))
+        # Reset the environment if the agent is stuck or can't find any agents or if we have captured enough frames in this one
+        is_stuck = self._frames_since_last_capture >= NUM_EMPTY_FRAMES_BEFORE_RESET
+        is_enough_datapoints = (
+            self._captured_frames_since_restart + 1) % NUM_RECORDINGS_BEFORE_RESET == 0
+
+        if (is_stuck or is_enough_datapoints) and GEN_DATA:
+            logging.warning("Is stucK: {}, is_enough_datapoints: {}".format(
+                is_stuck, is_enough_datapoints))
+            self._on_new_episode()
+            # If we dont sleep, the client will continue to render
+            return True
+
+        # (Extrinsic) Rt Matrix
+        # (Camera) local 3d to world 3d.
+        # Get the transform from the player protobuf transformation.
+        world_transform = Transform(
+            measurements.player_measurements.transform
+        )
+        # Compute the final transformation matrix.
+        self._extrinsic = world_transform * self._camera_to_car_transform
+        self._measurements = measurements
+        self._last_player_location = measurements.player_measurements.transform.location
+        self._main_image = sensor_data.get('CameraRGB', None)
+        self._lidar_measurement = sensor_data.get('Lidar32', None)
+        self._depth_image = sensor_data.get('DepthCamera', None)
+        # Print measurements every second.
+        if self._timer.elapsed_seconds_since_lap() > 1.0:
+            if self._city_name is not None:
+                # Function to get car position on map.
+                map_position = self._map.convert_to_pixel([
+                    measurements.player_measurements.transform.location.x,
+                    measurements.player_measurements.transform.location.y,
+                    measurements.player_measurements.transform.location.z])
+                # Function to get orientation of the road car is in.
+                lane_orientation = self._map.get_lane_orientation([
+                    measurements.player_measurements.transform.location.x,
+                    measurements.player_measurements.transform.location.y,
+                    measurements.player_measurements.transform.location.z])
+
+                MeasurementsDisplayHelper.print_player_measurements_map(
+                    measurements.player_measurements,
+                    map_position,
+                    lane_orientation, self._timer)
+            else:
+                MeasurementsDisplayHelper.print_player_measurements(
+                    measurements.player_measurements, self._timer)
+            # Plot position on the map as well.
+            self._timer.lap()
+
+        control = self._get_keyboard_control(pygame.key.get_pressed())
+        # Set the player position
+        if self._city_name is not None:
+            self._position = self._map.convert_to_pixel([
+                measurements.player_measurements.transform.location.x,
+                measurements.player_measurements.transform.location.y,
+                measurements.player_measurements.transform.location.z])
+            self._agent_positions = measurements.non_player_agents
+
+        if control is None:
+            self._on_new_episode()
+        elif self._enable_autopilot:
+            self.client.send_control(
+                measurements.player_measurements.autopilot_control)
+        else:
+            self.client.send_control(control)
+
+    def _get_keyboard_control(self, keys):
+        """
+        Return a VehicleControl message based on the pressed keys. Return None
+        if a new episode was requested.
+        """
+        control = KeyboardHelper.get_keyboard_control(
+            keys, self._is_on_reverse, self._enable_autopilot)
+        if control is not None:
+            control, self._is_on_reverse, self._enable_autopilot = control
+        return control
+
+    def _on_render(self):
+        datapoints = []
+
+        if self._main_image is not None and self._depth_image is not None:
+            # Convert main image
+            image = image_converter.to_rgb_array(self._main_image)
+
+            # Retrieve and draw datapoints
+            print('generate_datapoints')
+            image, datapoints = self._generate_datapoints(image)
+
+            # Draw lidar
+            # Camera coordinate system is left, up, forwards
+            if VISUALIZE_LIDAR:
+                # Calculation to shift bboxes relative to pitch and roll of player
+                rotation = self._measurements.player_measurements.transform.rotation
+                pitch, roll, yaw = rotation.pitch, rotation.roll, rotation.yaw
+                # Since measurements are in degrees, convert to radians
+
+                pitch = degrees_to_radians(pitch)
+                roll = degrees_to_radians(roll)
+                yaw = degrees_to_radians(yaw)
+                print('pitch: ', pitch)
+                print('roll: ', roll)
+                print('yaw: ', yaw)
+
+                # Rotation matrix for pitch
+                rotP = np.array([[cos(pitch),            0,              sin(pitch)],
+                                 [0,            1,     0],
+                                 [-sin(pitch),            0,     cos(pitch)]])
+                # Rotation matrix for roll
+                rotR = np.array([[1,            0,              0],
+                                 [0,            cos(roll),     -sin(roll)],
+                                 [0,            sin(roll),     cos(roll)]])
+
+                # combined rotation matrix, must be in order roll, pitch, yaw
+                rotRP = np.matmul(rotR, rotP)
+                # Take the points from the point cloud and transform to car space
+                point_cloud = np.array(self._lidar_to_car_transform.transform_points(
+                    self._lidar_measurement.data))
+                point_cloud[:, 2] -= LIDAR_HEIGHT_POS
+                point_cloud = np.matmul(rotRP, point_cloud.T).T
+                # print(self._lidar_to_car_transform.matrix)
+                # print(self._camera_to_car_transform.matrix)
+                # Transform to camera space by the inverse of camera_to_car transform
+                point_cloud_cam = self._camera_to_car_transform.inverse().transform_points(point_cloud)
+                point_cloud_cam[:, 1] += LIDAR_HEIGHT_POS
+                image = lidar_utils.project_point_cloud(
+                    image, point_cloud_cam, self._intrinsic, 1)
+
+            # Display image
+            surface = pygame.surfarray.make_surface(image.swapaxes(0, 1))
+            self._display.blit(surface, (0, 0))
+            if self._map_view is not None:
+                self._display_agents(self._map_view)
+            pygame.display.flip()
+
+            # Determine whether to save files
+            distance_driven = self._distance_since_last_recording()
+            #print("Distance driven since last recording: {}".format(distance_driven))
+            has_driven_long_enough = distance_driven is None or distance_driven > DISTANCE_SINCE_LAST_RECORDING
+            print('timer: ', self._timer.step)
+            if (self._timer.step + 1) % STEPS_BETWEEN_RECORDINGS == 0:
+                print('drive dist: ', distance_driven)
+                if has_driven_long_enough and datapoints:
+                    print('drive long enough: ')
+                    # Avoid doing this twice or unnecessarily often
+                    if not VISUALIZE_LIDAR:
+                        # Calculation to shift bboxes relative to pitch and roll of player
+                        rotation = self._measurements.player_measurements.transform.rotation
+                        pitch, roll, yaw = rotation.pitch, rotation.roll, rotation.yaw
+                        # Since measurements are in degrees, convert to radians
+
+                        pitch = degrees_to_radians(pitch)
+                        roll = degrees_to_radians(roll)
+                        yaw = degrees_to_radians(yaw)
+                        print('pitch: ', pitch)
+                        print('roll: ', roll)
+                        print('yaw: ', yaw)
+
+                        # Rotation matrix for pitch
+                        rotP = np.array([[cos(pitch),            0,              sin(pitch)],
+                                         [0,            1,     0],
+                                         [-sin(pitch),            0,     cos(pitch)]])
+                        # Rotation matrix for roll
+                        rotR = np.array([[1,            0,              0],
+                                         [0,            cos(
+                                             roll),     -sin(roll)],
+                                         [0,            sin(roll),     cos(roll)]])
+
+                        # combined rotation matrix, must be in order roll, pitch, yaw
+                        rotRP = np.matmul(rotR, rotP)
+                        # Take the points from the point cloud and transform to car space
+                        point_cloud = np.array(self._lidar_to_car_transform.transform_points(
+                            self._lidar_measurement.data))
+                        point_cloud[:, 2] -= LIDAR_HEIGHT_POS
+                        point_cloud = np.matmul(rotRP, point_cloud.T).T
+                    self._update_agent_location()
+                    # Save screen, lidar and kitti training labels together with calibration and groundplane files
+                    self._save_training_files(datapoints, point_cloud, self._lidar_measurement)
+                    self.captured_frame_no += 1
+                    self._captured_frames_since_restart += 1
+                    self._frames_since_last_capture = 0
+                else:
+                    logging.debug("Could save datapoint, but agent has not driven {} meters since last recording (Currently {} meters)".format(
+                        DISTANCE_SINCE_LAST_RECORDING, distance_driven))
+            else:
+                self._frames_since_last_capture += 1
+                logging.debug(
+                    "Could not save training data - no visible agents of selected classes in scene")
+
+    def _distance_since_last_recording(self):
+        if self._agent_location_on_last_capture is None:
+            return None
+        cur_pos = vector3d_to_array(
+            self._measurements.player_measurements.transform.location)
+        last_pos = vector3d_to_array(self._agent_location_on_last_capture)
+        def dist_func(x, y): return sum((x - y)**2)
+
+        return dist_func(cur_pos, last_pos)
+
+    def _update_agent_location(self):
+        self._agent_location_on_last_capture = self._measurements.player_measurements.transform.location
+
+    def _generate_datapoints(self, image):
+        """ Returns a list of datapoints (labels and such) that are generated this frame together with the main image image """
+        datapoints = []
+        image = image.copy()
+
+        # Remove this
+        rotRP = np.identity(3)
+        # Stores all datapoints for the current frames
+        for agent in self._measurements.non_player_agents:
+            if should_detect_class(agent) and GEN_DATA:
+                image, kitti_datapoint = create_kitti_datapoint(
+                    agent, self._intrinsic, self._extrinsic.matrix, image, self._depth_image, self._measurements.player_measurements, rotRP)
+                if kitti_datapoint:
+                    datapoints.append(kitti_datapoint)
+
+        print('datapoints # objs: ', type(image), type(datapoints), len(image), len(datapoints))
+        return image, datapoints
+
+    def _save_training_files(self, datapoints, point_cloud, lidar_measurement):
+        logging.info("Attempting to save at timer step {}, frame no: {}".format(
+            self._timer.step, self.captured_frame_no))
+        groundplane_fname = GROUNDPLANE_PATH.format(self.captured_frame_no)
+        lidar_fname = LIDAR_PATH.format(self.captured_frame_no)
+        kitti_fname = LABEL_PATH.format(self.captured_frame_no)
+        img_fname = IMAGE_PATH.format(self.captured_frame_no)
+        calib_filename = CALIBRATION_PATH.format(self.captured_frame_no)
+
+        save_groundplanes(
+            groundplane_fname, self._measurements.player_measurements, LIDAR_HEIGHT_POS)
+        save_ref_files(OUTPUT_FOLDER, self.captured_frame_no)
+        save_image_data(
+            img_fname, image_converter.to_rgb_array(self._main_image))
+        save_kitti_data(kitti_fname, datapoints)
+        save_lidar_data(lidar_fname, point_cloud, lidar_measurement,
+                        LIDAR_HEIGHT_POS, LIDAR_DATA_FORMAT)
+        save_calibration_matrices(
+            calib_filename, self._intrinsic, self._extrinsic)
+
+    def _display_agents(self, map_view):
+        image = image[:, :, :3]
+        new_window_width = (float(WINDOW_HEIGHT) / float(self._map_shape[0])) * \
+            float(self._map_shape[1])
+        surface = pygame.surfarray.make_surface(image.swapaxes(0, 1))
+        w_pos = int(
+            self._position[0]*(float(WINDOW_HEIGHT)/float(self._map_shape[0])))
+        h_pos = int(self._position[1] *
+                    (new_window_width/float(self._map_shape[1])))
+        pygame.draw.circle(surface, [255, 0, 0, 255], (w_pos, h_pos), 6, 0)
+        for agent in self._agent_positions:
+            if agent.HasField('vehicle'):
+                agent_position = self._map.convert_to_pixel([
+                    agent.vehicle.transform.location.x,
+                    agent.vehicle.transform.location.y,
+                    agent.vehicle.transform.location.z])
+                w_pos = int(
+                    agent_position[0]*(float(WINDOW_HEIGHT)/float(self._map_shape[0])))
+                h_pos = int(
+                    agent_position[1] * (new_window_width/float(self._map_shape[1])))
+                pygame.draw.circle(
+                    surface, [255, 0, 255, 255], (w_pos, h_pos), 4, 0)
+        self._display.blit(surface, (WINDOW_WIDTH, 0))
+
+
+def should_detect_class(agent):
+    """ Returns true if the agent is of the classes that we want to detect.
+        Note that Carla has class types in lowercase """
+    if agent.HasField('pedestrian'):
+        print('see a pedestrain')
+    return True in [agent.HasField(class_type.lower()) for class_type in CLASSES_TO_LABEL]
+
+
+def parse_args():
     argparser = argparse.ArgumentParser(
-        description=__doc__)
+        description='CARLA Manual Control Client')
+    argparser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        dest='debug',
+        help='logging.info debug information')
     argparser.add_argument(
         '--host',
         metavar='H',
-        default='127.0.0.1',
-        help='IP of the host server (default: 127.0.0.1)')
+        default='localhost',
+        help='IP of the host server (default: localhost)')
     argparser.add_argument(
         '-p', '--port',
         metavar='P',
@@ -73,314 +487,49 @@ def main():
         type=int,
         help='TCP port to listen to (default: 2000)')
     argparser.add_argument(
-        '-n', '--number-of-vehicles',
-        metavar='N',
-        default=30,
-        type=int,
-        help='Number of vehicles (default: 30)')
-    argparser.add_argument(
-        '-w', '--number-of-walkers',
-        metavar='W',
-        default=30,
-        type=int,
-        help='Number of walkers (default: 30)')
-    argparser.add_argument(
-        '--safe',
+        '-a', '--autopilot',
         action='store_true',
-        help='Avoid spawning vehicles prone to accidents')
+        help='enable autopilot')
     argparser.add_argument(
-        '--filterv',
-        metavar='PATTERN',
-        default='vehicle.*',
-        help='Filter vehicle model (default: "vehicle.*")')
-    argparser.add_argument(
-        '--generationv',
-        metavar='G',
-        default='All',
-        help='restrict to certain vehicle generation (values: "1","2","All" - default: "All")')
-    argparser.add_argument(
-        '--filterw',
-        metavar='PATTERN',
-        default='walker.pedestrian.*',
-        help='Filter pedestrian type (default: "walker.pedestrian.*")')
-    argparser.add_argument(
-        '--generationw',
-        metavar='G',
-        default='2',
-        help='restrict to certain pedestrian generation (values: "1","2","All" - default: "2")')
-    argparser.add_argument(
-        '--tm-port',
-        metavar='P',
-        default=8000,
-        type=int,
-        help='Port to communicate with TM (default: 8000)')
-    argparser.add_argument(
-        '--asynch',
+        '-l', '--lidar',
         action='store_true',
-        help='Activate asynchronous mode execution')
+        help='enable Lidar')
     argparser.add_argument(
-        '--hybrid',
-        action='store_true',
-        help='Activate hybrid mode for Traffic Manager')
+        '-q', '--quality-level',
+        choices=['Low', 'Epic'],
+        type=lambda s: s.title(),
+        default='Epic',
+        help='graphics quality level, a lower level makes the simulation run considerably faster.')
     argparser.add_argument(
-        '-s', '--seed',
-        metavar='S',
-        type=int,
-        help='Set random device seed and deterministic mode for Traffic Manager')
-    argparser.add_argument(
-        '--seedw',
-        metavar='S',
-        default=0,
-        type=int,
-        help='Set the seed for pedestrians module')
-    argparser.add_argument(
-        '--car-lights-on',
-        action='store_true',
-        default=False,
-        help='Enable automatic car light management')
-    argparser.add_argument(
-        '--hero',
-        action='store_true',
-        default=False,
-        help='Set one of the vehicles as hero')
-    argparser.add_argument(
-        '--respawn',
-        action='store_true',
-        default=False,
-        help='Automatically respawn dormant vehicles (only in large maps)')
-    argparser.add_argument(
-        '--no-rendering',
-        action='store_true',
-        default=False,
-        help='Activate no rendering mode')
-
+        '-m', '--map-name',
+        metavar='M',
+        default=None,
+        help='plot the map of the current city (needs to match active map in '
+             'server, options: Town01 or Town02)')
     args = argparser.parse_args()
+    return args
 
-    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 
-    vehicles_list = []
-    walkers_list = []
-    all_id = []
-    client = carla.Client(args.host, args.port)
-    client.set_timeout(10.0)
-    synchronous_master = False
-    random.seed(args.seed if args.seed is not None else int(time.time()))
+def main():
+    args = parse_args()
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(format='%(levelname)s: %(message)s', level=log_level)
+    logging.info('listening to server %s:%s', args.host, args.port)
+    logging.info(__doc__)
 
-    try:
-        world = client.get_world()
-
-        traffic_manager = client.get_trafficmanager(args.tm_port)
-        traffic_manager.set_global_distance_to_leading_vehicle(2.5)
-        if args.respawn:
-            traffic_manager.set_respawn_dormant_vehicles(True)
-        if args.hybrid:
-            traffic_manager.set_hybrid_physics_mode(True)
-            traffic_manager.set_hybrid_physics_radius(70.0)
-        if args.seed is not None:
-            traffic_manager.set_random_device_seed(args.seed)
-
-        settings = world.get_settings()
-        if not args.asynch:
-            traffic_manager.set_synchronous_mode(True)
-            if not settings.synchronous_mode:
-                synchronous_master = True
-                settings.synchronous_mode = True
-                settings.fixed_delta_seconds = 0.05
-            else:
-                synchronous_master = False
-        else:
-            print("You are currently in asynchronous mode. If this is a traffic simulation, \
-            you could experience some issues. If it's not working correctly, switch to synchronous \
-            mode by using traffic_manager.set_synchronous_mode(True)")
-
-        if args.no_rendering:
-            settings.no_rendering_mode = True
-        world.apply_settings(settings)
-
-        blueprints = get_actor_blueprints(world, args.filterv, args.generationv)
-        blueprintsWalkers = get_actor_blueprints(world, args.filterw, args.generationw)
-
-        if args.safe:
-            blueprints = [x for x in blueprints if int(x.get_attribute('number_of_wheels')) == 4]
-            blueprints = [x for x in blueprints if not x.id.endswith('microlino')]
-            blueprints = [x for x in blueprints if not x.id.endswith('carlacola')]
-            blueprints = [x for x in blueprints if not x.id.endswith('cybertruck')]
-            blueprints = [x for x in blueprints if not x.id.endswith('t2')]
-            blueprints = [x for x in blueprints if not x.id.endswith('sprinter')]
-            blueprints = [x for x in blueprints if not x.id.endswith('firetruck')]
-            blueprints = [x for x in blueprints if not x.id.endswith('ambulance')]
-
-        blueprints = sorted(blueprints, key=lambda bp: bp.id)
-
-        spawn_points = world.get_map().get_spawn_points()
-        number_of_spawn_points = len(spawn_points)
-
-        if args.number_of_vehicles < number_of_spawn_points:
-            random.shuffle(spawn_points)
-        elif args.number_of_vehicles > number_of_spawn_points:
-            msg = 'requested %d vehicles, but could only find %d spawn points'
-            logging.warning(msg, args.number_of_vehicles, number_of_spawn_points)
-            args.number_of_vehicles = number_of_spawn_points
-
-        # @todo cannot import these directly.
-        SpawnActor = carla.command.SpawnActor
-        SetAutopilot = carla.command.SetAutopilot
-        FutureActor = carla.command.FutureActor
-
-        # --------------
-        # Spawn vehicles
-        # --------------
-        batch = []
-        hero = args.hero
-        for n, transform in enumerate(spawn_points):
-            if n >= args.number_of_vehicles:
+    while True:
+        try:
+            with make_carla_client(args.host, args.port) as client:
+                game = CarlaGame(client, args)
+                game.execute()
                 break
-            blueprint = random.choice(blueprints)
-            if blueprint.has_attribute('color'):
-                color = random.choice(blueprint.get_attribute('color').recommended_values)
-                blueprint.set_attribute('color', color)
-            if blueprint.has_attribute('driver_id'):
-                driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
-                blueprint.set_attribute('driver_id', driver_id)
-            if hero:
-                blueprint.set_attribute('role_name', 'hero')
-                hero = False
-            else:
-                blueprint.set_attribute('role_name', 'autopilot')
+        except TCPConnectionError as error:
+            logging.error(error)
+            time.sleep(1)
 
-            # spawn the cars and set their autopilot and light state all together
-            batch.append(SpawnActor(blueprint, transform)
-                .then(SetAutopilot(FutureActor, True, traffic_manager.get_port())))
-
-        for response in client.apply_batch_sync(batch, synchronous_master):
-            if response.error:
-                logging.error(response.error)
-            else:
-                vehicles_list.append(response.actor_id)
-
-        # Set automatic vehicle lights update if specified
-        if args.car_lights_on:
-            all_vehicle_actors = world.get_actors(vehicles_list)
-            for actor in all_vehicle_actors:
-                traffic_manager.update_vehicle_lights(actor, True)
-
-        # -------------
-        # Spawn Walkers
-        # -------------
-        # some settings
-        percentagePedestriansRunning = 0.0      # how many pedestrians will run
-        percentagePedestriansCrossing = 0.0     # how many pedestrians will walk through the road
-        if args.seedw:
-            world.set_pedestrians_seed(args.seedw)
-            random.seed(args.seedw)
-        # 1. take all the random locations to spawn
-        spawn_points = []
-        for i in range(args.number_of_walkers):
-            spawn_point = carla.Transform()
-            loc = world.get_random_location_from_navigation()
-            if (loc != None):
-                spawn_point.location = loc
-                spawn_points.append(spawn_point)
-        # 2. we spawn the walker object
-        batch = []
-        walker_speed = []
-        for spawn_point in spawn_points:
-            walker_bp = random.choice(blueprintsWalkers)
-            # set as not invincible
-            if walker_bp.has_attribute('is_invincible'):
-                walker_bp.set_attribute('is_invincible', 'false')
-            # set the max speed
-            if walker_bp.has_attribute('speed'):
-                if (random.random() > percentagePedestriansRunning):
-                    # walking
-                    walker_speed.append(walker_bp.get_attribute('speed').recommended_values[1])
-                else:
-                    # running
-                    walker_speed.append(walker_bp.get_attribute('speed').recommended_values[2])
-            else:
-                print("Walker has no speed")
-                walker_speed.append(0.0)
-            batch.append(SpawnActor(walker_bp, spawn_point))
-        results = client.apply_batch_sync(batch, True)
-        walker_speed2 = []
-        for i in range(len(results)):
-            if results[i].error:
-                logging.error(results[i].error)
-            else:
-                walkers_list.append({"id": results[i].actor_id})
-                walker_speed2.append(walker_speed[i])
-        walker_speed = walker_speed2
-        # 3. we spawn the walker controller
-        batch = []
-        walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
-        for i in range(len(walkers_list)):
-            batch.append(SpawnActor(walker_controller_bp, carla.Transform(), walkers_list[i]["id"]))
-        results = client.apply_batch_sync(batch, True)
-        for i in range(len(results)):
-            if results[i].error:
-                logging.error(results[i].error)
-            else:
-                walkers_list[i]["con"] = results[i].actor_id
-        # 4. we put together the walkers and controllers id to get the objects from their id
-        for i in range(len(walkers_list)):
-            all_id.append(walkers_list[i]["con"])
-            all_id.append(walkers_list[i]["id"])
-        all_actors = world.get_actors(all_id)
-
-        # wait for a tick to ensure client receives the last transform of the walkers we have just created
-        if args.asynch or not synchronous_master:
-            world.wait_for_tick()
-        else:
-            world.tick()
-
-        # 5. initialize each controller and set target to walk to (list is [controler, actor, controller, actor ...])
-        # set how many pedestrians can cross the road
-        world.set_pedestrians_cross_factor(percentagePedestriansCrossing)
-        for i in range(0, len(all_id), 2):
-            # start walker
-            all_actors[i].start()
-            # set walk to random point
-            all_actors[i].go_to_location(world.get_random_location_from_navigation())
-            # max speed
-            all_actors[i].set_max_speed(float(walker_speed[int(i/2)]))
-
-        print('spawned %d vehicles and %d walkers, press Ctrl+C to exit.' % (len(vehicles_list), len(walkers_list)))
-
-        # Example of how to use Traffic Manager parameters
-        traffic_manager.global_percentage_speed_difference(30.0)
-
-        while True:
-            if not args.asynch and synchronous_master:
-                world.tick()
-            else:
-                world.wait_for_tick()
-
-    finally:
-
-        if not args.asynch and synchronous_master:
-            settings = world.get_settings()
-            settings.synchronous_mode = False
-            settings.no_rendering_mode = False
-            settings.fixed_delta_seconds = None
-            world.apply_settings(settings)
-
-        print('\ndestroying %d vehicles' % len(vehicles_list))
-        client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_list])
-
-        # stop walker controllers (list is [controller, actor, controller, actor ...])
-        for i in range(0, len(all_id), 2):
-            all_actors[i].stop()
-
-        print('\ndestroying %d walkers' % len(walkers_list))
-        client.apply_batch([carla.command.DestroyActor(x) for x in all_id])
-
-        time.sleep(0.5)
 
 if __name__ == '__main__':
-
     try:
         main()
     except KeyboardInterrupt:
-        pass
-    finally:
-        print('\ndone.')
+        logging.info('\nCancelled by user. Bye!')
