@@ -215,6 +215,7 @@ class World(object):
         self.lane_invasion_sensor = None
         self.gnss_sensor = None
         self.imu_sensor = None
+        self.lidar_manager = None
         self.radar_sensor = None
         self.camera_manager = None
         self._weather_presets = find_weather_presets()
@@ -305,10 +306,13 @@ class World(object):
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
         self.gnss_sensor = GnssSensor(self.player)
         self.imu_sensor = IMUSensor(self.player)
+        #self.imu_sensor = LidarManager(self.player)
+        #self.imu_sensor2 = LidarManager(self.player)
+
         self.camera_manager = CameraManager(self.player, self.hud, self._gamma)
         self.camera_manager.transform_index = cam_pos_index
+        print('cam_index:', cam_index)
         self.camera_manager.set_sensor(cam_index, notify=False)
-        self.lidar_manager = LidarManager(self.player, self.hud, self._gamma)
         actor_type = get_actor_display_name(self.player)
         self.hud.notification(actor_type)
 
@@ -407,7 +411,8 @@ class World(object):
             self.collision_sensor.sensor,
             self.lane_invasion_sensor.sensor,
             self.gnss_sensor.sensor,
-            self.imu_sensor.sensor]
+            self.imu_sensor.sensor,
+            self.lidar_manager.sensor]
         for sensor in sensors:
             if sensor is not None:
                 sensor.stop()
@@ -998,6 +1003,7 @@ class IMUSensor(object):
     @staticmethod
     def _IMU_callback(weak_self, sensor_data):
         self = weak_self()
+        print('imu sensor callback')
         if not self:
             return
         limits = (-99.9, 99.9)
@@ -1080,94 +1086,39 @@ class RadarSensor(object):
                 color=carla.Color(r, g, b))
 
 # ==============================================================================
-# -- CameraManager -------------------------------------------------------------
+# -- LidarManager -------------------------------------------------------------
 # ==============================================================================
 
 class LidarManager(object):
-    def __init__(self, parent_actor, hud, gamma_correction):
+    def __init__(self, parent_actor):
         self.sensor = None
-        self.surface = None
         self._parent = parent_actor
-        self.hud = hud
-        self.recording = False
-        bound_x = 0.5 + self._parent.bounding_box.extent.x
-        bound_y = 0.5 + self._parent.bounding_box.extent.y
-        bound_z = 0.5 + self._parent.bounding_box.extent.z
-        Attachment = carla.AttachmentType
-
-        if not self._parent.type_id.startswith("walker.pedestrian"):
-            self._camera_transforms = [
-                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
-                (carla.Transform(carla.Location(x=-2.0*bound_x, y=+0.0*bound_y, z=2.0*bound_z), carla.Rotation(pitch=8.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=+1.9*bound_x, y=+1.0*bound_y, z=1.2*bound_z)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=-2.8*bound_x, y=+0.0*bound_y, z=4.6*bound_z), carla.Rotation(pitch=6.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=-1.0, y=-1.0*bound_y, z=0.4*bound_z)), Attachment.Rigid)]
-        else:
-            self._camera_transforms = [
-                (carla.Transform(carla.Location(x=-2.5, z=0.0), carla.Rotation(pitch=-8.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=1.6, z=1.7)), Attachment.Rigid),
-                (carla.Transform(carla.Location(x=2.5, y=0.5, z=0.0), carla.Rotation(pitch=-8.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=-4.0, z=2.0), carla.Rotation(pitch=6.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=0, y=-2.5, z=-0.0), carla.Rotation(yaw=90.0)), Attachment.Rigid)]
-
-        self.transform_index = 1
-        self.sensors = [
-            ['sensor.lidar.ray_cast', None, 'Lidar (Ray-Cast)', {'range': '50'}]
-	]
+        self.accelerometer = (0.0, 0.0, 0.0)
+        self.gyroscope = (0.0, 0.0, 0.0)
+        self.compass = 0.0
         world = self._parent.get_world()
         bp_library = world.get_blueprint_library()
-        bp = bp_library.find(self.sensors[0][0])
-	print(bp)
-        if self.sensors[0][0].startswith('sensor.lidar'):
-            self.lidar_range = 50
-            for attr_name, attr_value in item[3].items():
-                bp.set_attribute(attr_name, attr_value)
-                if attr_name == 'range':
-                    self.lidar_range = float(attr_value)
-            self.sensors[0].append(bp)
-        needs_respawn = True
-        if needs_respawn:
-            if self.sensor is not None:
-                self.sensor.destroy()
-                self.surface = None
-            self.sensor = self._parent.get_world().spawn_actor(
-                self.sensors[0][-1],
-                self._camera_transforms[self.transform_index][0],
-                attach_to=self._parent,
-                attachment_type=self._camera_transforms[self.transform_index][1])
-            # We need to pass the lambda a weak reference to self to avoid
-            # circular reference.
-            weak_self = weakref.ref(self)
-            self.sensor.listen(lambda image: LidarManager._parse_image(weak_self, image))
-
-    def toggle_recording(self):
-        self.recording = not self.recording
-        self.hud.notification('Recording %s' % ('On' if self.recording else 'Off'))
-
-    def render(self, display):
-        if self.surface is not None:
-            display.blit(self.surface, (0, 0))
+        bp = world.get_blueprint_library().find('sensor.lidar.ray_cast')
+        #bp = world.get_blueprint_library().find('sensor.other.imu')
+        self.sensor = world.spawn_actor(
+            bp,
+            carla.Transform(),
+            attach_to=self._parent)
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda sensor_data: LidarManager._parse_image(weak_self, sensor_data))
 
     @staticmethod
-    def _parse_image(weak_self, image):
+    def _test_callback(image):
+        print('lidar parse data')
+        return
+
+    @staticmethod
+    def _parse_image(weak_self, sensor_data):
         self = weak_self()
         if not self:
             return
-        if True: #self.sensors[self.index][0].startswith('sensor.lidar'):
-            points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
-            points = np.reshape(points, (int(points.shape[0] / 4), 4))
-            lidar_data = np.array(points[:, :2])
-            lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
-            lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
-            lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
-            lidar_data = lidar_data.astype(np.int32)
-            lidar_data = np.reshape(lidar_data, (-1, 2))
-            lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
-            lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
-            lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-            self.surface = pygame.surfarray.make_surface(lidar_img)
-        if self.recording:
-            image.save_to_disk('_out/lidar/%08d.png' % image.frame)
+        print('lidar parse data', type(sensor_data))
+        return
 
 #================================================================
 
@@ -1208,7 +1159,7 @@ class CameraManager(object):
             ['sensor.camera.semantic_segmentation', cc.CityScapesPalette, 'Camera Semantic Segmentation (CityScapes Palette)', {}],
             ['sensor.camera.instance_segmentation', cc.CityScapesPalette, 'Camera Instance Segmentation (CityScapes Palette)', {}],
             ['sensor.camera.instance_segmentation', cc.Raw, 'Camera Instance Segmentation (Raw)', {}],
-            ['sensor.lidar.ray_cast', None, 'Lidar (Ray-Cast)', {'range': '50'}],
+#            ['sensor.lidar.ray_cast', None, 'Lidar (Ray-Cast)', {'range': '50'}],
             ['sensor.camera.dvs', cc.Raw, 'Dynamic Vision Sensor', {}],
             ['sensor.camera.rgb', cc.Raw, 'Camera RGB Distorted',
                 {'lens_circle_multiplier': '3.0',
@@ -1272,12 +1223,14 @@ class CameraManager(object):
         self.hud.notification('Recording %s' % ('On' if self.recording else 'Off'))
 
     def render(self, display):
+        return
         if self.surface is not None:
             display.blit(self.surface, (0, 0))
 
     @staticmethod
     def _parse_image(weak_self, image):
         self = weak_self()
+        print('cam manager')
         if not self:
             return
         if self.sensors[self.index][0].startswith('sensor.lidar'):
@@ -1310,12 +1263,15 @@ class CameraManager(object):
             array = array[:, :, ::-1]
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         else:
+            print('cam manager 1')
             image.convert(self.sensors[self.index][1])
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
             array = array[:, :, :3]
             array = array[:, :, ::-1]
+            print('cam manager 2')
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+            print('cam manager 3')
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
 

@@ -2,6 +2,18 @@
 	arldell
 	newamdpc
 
+----------- carla-traing-data migrate to 9.13 ------------------------
+python client_bounding_boxes.py --host arldell --res 1024x400 --weather ClearNight
+python client_bounding_boxes.py --host i9lab-wifi --res 1024x400 --weather ClearNoon
+
+manuel_control.py converting lot of issue. switching to use cbb.py
+
+
+python kitti_test.py _out/velodyne/00001657.bin testpcd_rec2.pcd
+	convert kitti bin to pcd
+pcl_viewer testpcd_rec2.pcd
+	view the output pcd
+
 ----------- 9.13 config.py ex ------------------------
 config.py control game runtime stuff:
 
