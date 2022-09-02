@@ -83,6 +83,7 @@ except IndexError:
 import carla
 
 from carla import ColorConverter as cc
+from dataexport_913 import * #save_lidar_data...
 
 import argparse
 import collections
@@ -187,7 +188,10 @@ def get_actor_blueprints(world, filter, generation):
 # ==============================================================================
 # -- World ---------------------------------------------------------------------
 # ==============================================================================
-
+town5_pos1 =carla.Transform(carla.Location(x=-77.074196, y=103.549164, z=40.434952), carla.Rotation(pitch=-90.999847, yaw=0.770454, roll=0.000098))
+town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=145.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+#town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=90.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+town1_pos2 =carla.Transform(carla.Location(x=213.88, y=59.90, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
 
 class World(object):
     def __init__(self, carla_world, hud, args):
@@ -243,7 +247,8 @@ class World(object):
         cam_index = self.camera_manager.index if self.camera_manager is not None else 0
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
-        blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        #blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        blueprint = random.choice(get_actor_blueprints(self.world, 'vehicle.ford.mustang', self._actor_generation))
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -263,7 +268,15 @@ class World(object):
             spawn_point = self.player.get_transform()
             spawn_point.location.z += 2.0
             spawn_point.rotation.roll = 0.0
+            #x=213.880447, y=59.902679, z=0.300000
+            spawn_point.location.x = 213.88
+            spawn_point.location.y = 59.90
+            spawn_point.location.z = 0.3
+            spawn_point.rotation.roll = 0.0
             spawn_point.rotation.pitch = 0.0
+            spawn_point.rotation.yaw = 0
+            spawn_point = town1_pos2
+            #spawn_point = town5_pos2
             self.destroy()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
             self.show_vehicle_telemetry = False
@@ -275,6 +288,14 @@ class World(object):
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
             spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+            spawn_point.location.x = 213.88
+            spawn_point.location.y = 59.90
+            spawn_point.location.z = 0.3
+            spawn_point.rotation.roll = 0.0
+            spawn_point.rotation.pitch = 0.0
+            spawn_point.rotation.yaw = 0
+            spawn_point = town1_pos2
+            #spawn_point = town5_pos2
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
@@ -288,6 +309,12 @@ class World(object):
         self.camera_manager.set_sensor(cam_index, notify=False)
         actor_type = get_actor_display_name(self.player)
         self.hud.notification(actor_type)
+
+        spectator = self.world.get_spectator()
+        print('spectator: ', spectator)
+        spec_trans = self.player.get_transform()
+        spec_trans.location.z += 5
+        spectator.set_transform(spec_trans)
 
         if self.sync:
             self.world.tick()
@@ -1134,7 +1161,10 @@ class CameraManager(object):
         if not self:
             return
         if self.sensors[self.index][0].startswith('sensor.lidar'):
+            lidar_loc = self.sensor.get_transform()
+            print('lidar location ', self.sensor, lidar_loc)
             points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
+            print('lidar parse data: range', self.lidar_range, ' #points ', len(points), ' hud ', self.hud.dim)
             points = np.reshape(points, (int(points.shape[0] / 4), 4))
             lidar_data = np.array(points[:, :2])
             lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
@@ -1146,6 +1176,12 @@ class CameraManager(object):
             lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
             lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
             self.surface = pygame.surfarray.make_surface(lidar_img)
+            if self.recording:
+                lidar_fname='_out/velodyne/%08d.bin' % image.frame
+                lidar_pcdfname='_out/velodyne/pcd/%08d.pcd' % image.frame
+                save_lidar_data(lidar_fname, lidar_pcdfname, points,
+                        "bin")
+
         elif self.sensors[self.index][0].startswith('sensor.camera.dvs'):
             # Example of converting the raw_data from a carla.DVSEventArray
             # sensor into a NumPy array and using it as an image
@@ -1189,6 +1225,10 @@ def game_loop(args):
         client.set_timeout(20.0)
 
         sim_world = client.get_world()
+        if args.map is not None:
+            print('load map %r.' % args.map)
+            sim_world = client.load_world(args.map)
+
         if args.sync:
             original_settings = sim_world.get_settings()
             settings = sim_world.get_settings()
@@ -1203,6 +1243,10 @@ def game_loop(args):
         if args.autopilot and not sim_world.get_settings().synchronous_mode:
             print("WARNING: You are currently in asynchronous mode and could "
                   "experience some issues with the traffic simulation")
+        if args.fps is not None:
+            settings = sim_world.get_settings()
+            settings.fixed_delta_seconds = (1.0 / args.fps) if args.fps > 0.0 else 0.0
+            sim_world.apply_settings(settings)
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -1301,6 +1345,17 @@ def main():
         '--sync',
         action='store_true',
         help='Activate synchronous mode execution')
+    argparser.add_argument(
+        '-m', '--map',
+        default='Town01',
+        help='load a new map, use --list to see available maps')
+    argparser.add_argument(
+        '--fps',
+        metavar='N',
+        default=10,
+        type=float,
+        help='set fixed FPS, zero for variable FPS (similar to --delta-seconds)')
+
     args = argparser.parse_args()
 
     args.width, args.height = [int(x) for x in args.res.split('x')]

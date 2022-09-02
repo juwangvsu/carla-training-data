@@ -16,7 +16,7 @@ https://carla.readthedocs.io/en/latest/configuring_the_simulation/
 import glob
 import os
 import sys
-
+import random
 try:
     sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
         sys.version_info.major,
@@ -71,7 +71,20 @@ def list_blueprints(world, bp_filter):
         print('    ' + bp)
     print('')
 
+town5_pos1 =carla.Transform(carla.Location(x=-77.074196, y=103.549164, z=40.434952), carla.Rotation(pitch=-90.999847, yaw=0.770454, roll=0.000098))
+town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=145.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
 
+def movespectator(args, world):
+    spectator = world.get_spectator()
+    print('spectator: ', spectator)
+    spectator.set_transform(town5_pos1)
+
+def spawnveh(args, world):
+    spectator = world.get_spectator()
+    blueprint= random.choice(world.get_blueprint_library().filter("vehicle.*"))
+    player = world.try_spawn_actor(blueprint, town5_pos2)
+    print('vehicle: ', player)
+    #player.set_transform(town5_pos2)
 
 def clean_vehs(args, client):
     address = '%s:%d' % (get_ip(args.host), args.port)
@@ -137,6 +150,8 @@ def inspect(args, client):
     print('  * walkers:  % 20d' % len(actors.filter('walker.*')))
     print('  * sensors:  % 20d' % len(actors.filter('sensor.*')))
     print('-' * 34)
+    spectator=actors.filter('spectator')
+    print('  spectator: ', spectator[0].get_transform())
     vehs= actors.filter('vehicle.*')
     print(vehs)
     sensors= actors.filter('sensor.*')
@@ -188,6 +203,14 @@ def main():
         '--rendering',
         action='store_true',
         help='enable rendering')
+    argparser.add_argument(
+        '--spectator',
+        action='store_true',
+        help='move spectator to ')
+    argparser.add_argument(
+        '--spawnveh',
+        action='store_true',
+        help='spawn veh at ')
     argparser.add_argument(
         '--no-rendering',
         action='store_true',
@@ -241,6 +264,7 @@ def main():
     args = argparser.parse_args()
 
     client = carla.Client(args.host, args.port, worker_threads=1)
+    world = client.get_world()
     client.set_timeout(10.0)
 
     if args.default:
@@ -356,6 +380,10 @@ def main():
         list_options(client)
     if args.list_blueprints:
         list_blueprints(world, args.list_blueprints)
+    if args.spectator:
+        movespectator(args, world)
+    if args.spawnveh:
+        spawnveh(args, world)
 
 
 if __name__ == '__main__':

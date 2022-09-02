@@ -10,7 +10,7 @@ import numpy as np
 import os
 import logging
 from utils import degrees_to_radians
-
+import open3d as o3d
 
 def save_groundplanes(planes_fname, player_measurements, lidar_height):
     from math import cos, sin
@@ -53,6 +53,24 @@ def save_image_data(filename, image):
     color_fmt = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     cv2.imwrite(filename, color_fmt)
 
+def convert_kitti_bin_to_pcd(binFilePath):
+    size_float = 4
+    list_pcd = []
+    list_pcdi = []
+    with open(binFilePath, "rb") as f:
+        byte = f.read(size_float * 4)
+        while byte:
+            x, y, z, intensity = struct.unpack("ffff", byte)
+            list_pcd.append([x, y, z])
+            list_pcdi.append([x, y, z, intensity])
+            byte = f.read(size_float * 4)
+    np_pcd = np.asarray(list_pcd)
+    np_pcdi = np.asarray(list_pcdi)
+    #np_pcdi.tofile('/tmp/testpcd.bin') this will not generate the same file format as kitti bin due to encoding
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np_pcd)
+    return pcd, np_pcdi
+
 def convert_pcd_to_kitti_bin(pcd, binFilePath):
     f=open(binFilePath, "wb")
     for i in range(pcd.shape[0]):
@@ -62,7 +80,7 @@ def convert_pcd_to_kitti_bin(pcd, binFilePath):
 
 # add lidara_measurement , jwang
 # point_cloud np array shape nx3
-def save_lidar_data(filename, point_cloud, format="bin"):
+def save_lidar_data(filename, pcdfilename, point_cloud, format="bin"):
     """ Saves lidar data to given filename, according to the lidar data format.
         bin is used for KITTI-data format, while .ply is the regular point cloud format
         In Unreal, the coordinate system of the engine is defined as, which is the same as the lidar points
@@ -88,13 +106,14 @@ def save_lidar_data(filename, point_cloud, format="bin"):
         NOTE: We do not flip the coordinate system when saving to .ply.
     """
     logging.info("Wrote lidar data to %s", filename)
-    print("Wrote lidar data to %s", filename)
+    print("Wrote lidar data to %s", filename, ' #pts: ', point_cloud.shape)
 
 
     if format == "bin":
         lidar_array = [[point[0], -point[1], point[2], 1.0]
                        for point in point_cloud]
         lidar_array = np.array(lidar_array).astype(np.float32)
+        lidar_array_3d = lidar_array[:,:3] 
         logging.debug("Lidar min/max of x: {} {}".format(
                       lidar_array[:, 0].min(), lidar_array[:, 0].max()))
         logging.debug("Lidar min/max of y: {} {}".format(
@@ -102,6 +121,10 @@ def save_lidar_data(filename, point_cloud, format="bin"):
         logging.debug("Lidar min/max of z: {} {}".format(
                       lidar_array[:, 2].min(), lidar_array[:, 0].max()))
         lidar_array.tofile(filename)
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(lidar_array_3d)
+        pcd = pcd.paint_uniform_color(np.array([255,0,0]))
+        o3d.io.write_point_cloud(pcdfilename, pcd)
 
     else:
         lidar_measurement.point_cloud.save_to_disk(filename)

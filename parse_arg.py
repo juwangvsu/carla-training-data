@@ -100,13 +100,18 @@ def parse_arg():
         help='Set the seed for pedestrians module')
     argparser.add_argument(
         '--weather',
-        default='ClearNight',
+        default='ClearNoon',
         help='set weather preset, use --list to see available presets')
     argparser.add_argument(
         '-m', '--map',
         default='Town01',
         help='load a new map, use --list to see available maps')
-
+    argparser.add_argument(
+        '--fps',
+        metavar='N',
+        default=10,
+        type=float,
+        help='set fixed FPS, zero for variable FPS (similar to --delta-seconds)')
 
 
     args = argparser.parse_args()

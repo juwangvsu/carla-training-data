@@ -2,17 +2,31 @@
 	arldell
 	newamdpc
 
------------ carla-traing-data migrate to 9.13 ------------------------
-python client_bounding_boxes.py --host arldell --res 1024x400 --weather ClearNight
+----------- 9/1/22 carla-traing-data migrate to 9.13 ------------------------
+python client_bounding_boxes.py --host arldell --res 1024x400
 python client_bounding_boxes.py --host i9lab-wifi --res 1024x400 --weather ClearNoon
-
+	this now dump lidar data bin and pcl xyzrgb format.
+ 
 manuel_control.py converting lot of issue. switching to use cbb.py
-
+	lidar or camera one of them. if use both crash
+manuel_control_ori.py
+	
+	spawn veh at map Town05 and a specific location to examine lidar data
+	lidar point # 2000 ~ 7000 vary
 
 python kitti_test.py _out/velodyne/00001657.bin testpcd_rec2.pcd
 	convert kitti bin to pcd
 pcl_viewer testpcd_rec2.pcd
 	view the output pcd
+rosrun icp_viewer icp_viewer *.pcd
+
+default lidar setting: 56000 pt/s, 10 hz
+	issue: some scan contain part of the 360 deg. average 3000 pts per pcd file
+	fix: set FPS=10, python config.py --fps=10
+		default 30 fps so get 1/3 of a full resolution since lidar run at 10hz
+ccb issue:
+	can save both camera and lidar now, but camera frame rate is much lower than lidar
+	also driving control very sluggish
 
 ----------- 9.13 config.py ex ------------------------
 config.py control game runtime stuff:

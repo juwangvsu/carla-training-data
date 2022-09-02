@@ -65,6 +65,10 @@ except ImportError:
 
 #stuff from carla-training-data
 from dataexport_913 import * #save_lidar_data...
+town5_pos1 =carla.Transform(carla.Location(x=-77.074196, y=103.549164, z=40.434952), carla.Rotation(pitch=-90.999847, yaw=0.770454, roll=0.000098))
+town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=145.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+#town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=90.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+town1_pos2 =carla.Transform(carla.Location(x=213.88, y=59.90, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
 
 VIEW_WIDTH = 1920//2
 VIEW_HEIGHT = 1080//2
@@ -268,7 +272,8 @@ class BasicSynchronousClient(object):
         Spawns actor-vehicle to be controled.
         """
 
-        car_bp = self.world.get_blueprint_library().filter('vehicle.*')[0]
+        car_bp = self.world.get_blueprint_library().filter('vehicle.ford.mustang')[0]
+        #car_bp = self.world.get_blueprint_library().filter('vehicle.*')[0]
         spawn_point = random.choice(self.world.get_map().get_spawn_points())
         spawn_point.location.x = 213.88
         spawn_point.location.y = 59.90
@@ -276,21 +281,28 @@ class BasicSynchronousClient(object):
         spawn_point.rotation.roll = 0.0
         spawn_point.rotation.pitch = 0.0
         spawn_point.rotation.yaw = 0
-
+        spawn_point = town1_pos2
         self.car = self.world.spawn_actor(car_bp, spawn_point)
         return spawn_point
 
     def setup_lidar(self):
         bp = self.world.get_blueprint_library().find('sensor.lidar.ray_cast')
-        bp.set_attribute('range', '100')
+        bp.set_attribute('range', '50')
         #bp = world.get_blueprint_library().find('sensor.other.imu')
-        lidar_trans=carla.Transform()
-        lidar_trans.location.x=0
-        lidar_trans.location.z=3
+        bound_x = 0.5 + self.car.bounding_box.extent.x
+        bound_y = 0.5 + self.car.bounding_box.extent.y
+        bound_z = 0.5 + self.car.bounding_box.extent.z
+
+        #lidar_trans=carla.Transform()
+        #lidar_trans.location.x=0
+        #lidar_trans.location.z=3
+        lidar_trans = carla.Transform(carla.Location(x=-2.0*bound_x, y=+0.0*bound_y, z=2.0*bound_z), carla.Rotation(pitch=8.0))
+        attch_t = carla.AttachmentType.SpringArm
         self.lidar_sensor = self.world.spawn_actor(
             bp,
             lidar_trans,
-            attach_to=self.car)
+            attach_to=self.car,
+            attachment_type=attch_t)
         weak_self = weakref.ref(self)
         self.lidar_sensor.listen(lambda sensor_data: weak_self()._parse_lidar(weak_self, sensor_data))
 
@@ -363,9 +375,9 @@ class BasicSynchronousClient(object):
         print('lidar callback')
         #t_start = self.timer.time()
 
-        disp_size = [int(self.args.width/2), int(self.args.height/2)]
+        disp_size = [int(self.args.width), int(self.args.height)]
         
-        lidar_range = 100
+        lidar_range = 50
         #lidar_range = 2.0*float(self.sensor_options['range'])
 
         points = np.frombuffer(img.raw_data, dtype=np.dtype('f4'))
@@ -381,8 +393,8 @@ class BasicSynchronousClient(object):
 
         self.lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
         lidar_fname='_out/velodyne/%08d.bin' % img.frame
-        save_lidar_data(lidar_fname, points,
-                        "bin")
+        lidar_pcdfname='_out/velodyne/pcd/%08d.pcd' % img.frame
+        save_lidar_data(lidar_fname, lidar_pcdfname, points, "bin")
         return
 
     @staticmethod
@@ -398,6 +410,10 @@ class BasicSynchronousClient(object):
         if self.capture:
             self.image = img
             self.capture = False
+            from carla import ColorConverter as cc
+            img.convert(cc.Raw)
+            print('save camera image: _out/%08d.png' % img.frame)
+            img.save_to_disk('_out/%08d' % img.frame)
 
     def render(self, display):
         """
@@ -429,6 +445,10 @@ class BasicSynchronousClient(object):
             print('load map %r.' % self.args.map)
             #self.world = self.client.get_world()
             self.world = self.client.load_world(self.args.map) #load map take 10 secs
+            if self.args.map is not None:
+                print('load map %r.' % self.args.map)
+                self.world = self.client.load_world(self.args.map)
+
 
             self.traffic_manager = self.client.get_trafficmanager()
 
@@ -446,6 +466,17 @@ class BasicSynchronousClient(object):
 
             self.display = pygame.display.set_mode((self.args.width, 2*self.args.height), pygame.HWSURFACE | pygame.DOUBLEBUF)
             #self.display = pygame.display.set_mode((VIEW_WIDTH, VIEW_HEIGHT), pygame.HWSURFACE | pygame.DOUBLEBUF)
+            spectator = self.world.get_spectator()
+            print('spectator: ', spectator)
+            spec_trans = self.car.get_transform()
+            spec_trans.location.z += 5
+            spectator.set_transform(spec_trans)
+
+            if self.args.fps is not None:
+                settings = self.world.get_settings()
+                settings.fixed_delta_seconds = (1.0 / self.args.fps) if self.args.fps > 0.0 else 0.0
+                self.world.apply_settings(settings)
+
             pygame_clock = pygame.time.Clock()
 
             self.set_synchronous_mode(True)

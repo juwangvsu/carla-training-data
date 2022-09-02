@@ -83,6 +83,7 @@ except IndexError:
 import carla
 
 from carla import ColorConverter as cc
+from dataexport_913 import * #save_lidar_data...
 
 import argparse
 import collections
@@ -191,6 +192,10 @@ def get_actor_blueprints(world, filter, generation):
 # ==============================================================================
 
 from config import clean_vehs
+town5_pos1 =carla.Transform(carla.Location(x=-77.074196, y=103.549164, z=40.434952), carla.Rotation(pitch=-90.999847, yaw=0.770454, roll=0.000098))
+town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=145.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+#town5_pos2 =carla.Transform(carla.Location(x=-75.074196, y=90.549164, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
+town1_pos2 =carla.Transform(carla.Location(x=213.88, y=59.90, z=0.434952), carla.Rotation(pitch=0, yaw=0, roll=0.000098))
 
 class World(object):
     def __init__(self, carla_world, hud, args, client, traffic_manager):
@@ -215,7 +220,7 @@ class World(object):
         self.lane_invasion_sensor = None
         self.gnss_sensor = None
         self.imu_sensor = None
-        self.lidar_manager = None
+        self.lidar_sensor = None
         self.radar_sensor = None
         self.camera_manager = None
         self._weather_presets = find_weather_presets()
@@ -253,6 +258,7 @@ class World(object):
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
         blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        blueprint = random.choice(get_actor_blueprints(self.world, 'vehicle.ford.mustang', self._actor_generation))
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -279,7 +285,9 @@ class World(object):
             spawn_point.rotation.pitch = 0.0
             spawn_point.rotation.yaw = 0 
             self.destroy()
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            #self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            self.player = self.world.try_spawn_actor(blueprint, town1_pos2)
+            #self.player = self.world.try_spawn_actor(blueprint, town5_pos2)
             print('vehicle spawn pos init: ', spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
@@ -297,7 +305,9 @@ class World(object):
             spawn_point.rotation.roll = 0.0
             spawn_point.rotation.pitch = 0.0
             spawn_point.rotation.yaw = 0 
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            #self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            self.player = self.world.try_spawn_actor(blueprint, town1_pos2)
+            #self.player = self.world.try_spawn_actor(blueprint, town5_pos2)
             print('vehicle spawn pos: ', spawn_point)
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
@@ -306,13 +316,15 @@ class World(object):
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
         self.gnss_sensor = GnssSensor(self.player)
         self.imu_sensor = IMUSensor(self.player)
-        #self.imu_sensor = LidarManager(self.player)
+        self.lidar_sensor = LidarManager(self.player,self.hud)
+        lidar_loc = self.lidar_sensor.sensor.get_transform()
+        print('lidar location ', self.lidar_sensor.sensor, lidar_loc)
         #self.imu_sensor2 = LidarManager(self.player)
 
         self.camera_manager = CameraManager(self.player, self.hud, self._gamma)
         self.camera_manager.transform_index = cam_pos_index
         print('cam_index:', cam_index)
-        self.camera_manager.set_sensor(cam_index, notify=False)
+        #self.camera_manager.set_sensor(cam_index, notify=False)
         actor_type = get_actor_display_name(self.player)
         self.hud.notification(actor_type)
 
@@ -395,11 +407,12 @@ class World(object):
         self.hud.tick(self, clock)
 
     def render(self, display):
-        self.camera_manager.render(display)
+        self.lidar_sensor.render(display)
+        #self.camera_manager.render(display)
         self.hud.render(display)
 
     def destroy_sensors(self):
-        self.camera_manager.sensor.destroy()
+        #self.camera_manager.sensor.destroy()
         self.camera_manager.sensor = None
         self.camera_manager.index = None
 
@@ -412,7 +425,7 @@ class World(object):
             self.lane_invasion_sensor.sensor,
             self.gnss_sensor.sensor,
             self.imu_sensor.sensor,
-            self.lidar_manager.sensor]
+            self.lidar_sensor.sensor]
         for sensor in sensors:
             if sensor is not None:
                 sensor.stop()
@@ -529,6 +542,7 @@ class KeyboardControl(object):
                     world.camera_manager.set_sensor(event.key - 1 - K_0 + index_ctrl)
                 elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
                     world.camera_manager.toggle_recording()
+                    world.lidar_sensor.toggle_recording()
                 elif event.key == K_r and (pygame.key.get_mods() & KMOD_CTRL):
                     if (world.recording_enabled):
                         client.stop_recorder()
@@ -1090,22 +1104,46 @@ class RadarSensor(object):
 # ==============================================================================
 
 class LidarManager(object):
-    def __init__(self, parent_actor):
+    def __init__(self, parent_actor,hud):
         self.sensor = None
+        self.surface = None
+        self.hud = hud
+        self.lidar_range = 50 
+        self.recording = False
         self._parent = parent_actor
+        bound_x = 0.5 + self._parent.bounding_box.extent.x
+        bound_y = 0.5 + self._parent.bounding_box.extent.y
+        bound_z = 0.5 + self._parent.bounding_box.extent.z
+
         self.accelerometer = (0.0, 0.0, 0.0)
         self.gyroscope = (0.0, 0.0, 0.0)
         self.compass = 0.0
         world = self._parent.get_world()
         bp_library = world.get_blueprint_library()
         bp = world.get_blueprint_library().find('sensor.lidar.ray_cast')
+        self.bp=bp
+        bp.set_attribute('range', str(self.lidar_range))
+        #lidar_trans = carla.Transform(carla.Location(x=-2.5, z=0.0), carla.Rotation(pitch=-8.0))
+        lidar_trans = carla.Transform(carla.Location(x=-2.0*bound_x, y=+0.0*bound_y, z=2.0*bound_z), carla.Rotation(pitch=8.0))
+        attch_t = carla.AttachmentType.SpringArm
         #bp = world.get_blueprint_library().find('sensor.other.imu')
+        print('lidar loc bf spawn: ', lidar_trans)
         self.sensor = world.spawn_actor(
             bp,
-            carla.Transform(),
-            attach_to=self._parent)
+            lidar_trans, #carla.Transform(),
+            attach_to=self._parent,
+            attachment_type=attch_t)
         weak_self = weakref.ref(self)
+        print('lidar loc after spawn: ', self.sensor, self.sensor.get_transform())
         self.sensor.listen(lambda sensor_data: LidarManager._parse_image(weak_self, sensor_data))
+
+    def render(self, display):
+    #    return
+        if self.surface is not None:
+            display.blit(self.surface, (0, 0))
+    def toggle_recording(self):
+        self.recording = not self.recording
+        self.hud.notification('Recording %s' % ('On' if self.recording else 'Off'))
 
     @staticmethod
     def _test_callback(image):
@@ -1117,7 +1155,29 @@ class LidarManager(object):
         self = weak_self()
         if not self:
             return
-        print('lidar parse data', type(sensor_data))
+        else:
+            #lidar_loc = self.sensor.get_transform()
+            #print('lidar location ', self.sensor, lidar_loc)
+
+            points = np.frombuffer(sensor_data.raw_data, dtype=np.dtype('f4'))
+            print('lidar parse data type: ', type(sensor_data), ' range', self.lidar_range, ' #points ', len(points), ' hud ', self.hud.dim)
+            print('lidar attributes: pt/s', self.bp.get_attribute('points_per_second'), self.bp.get_attribute('rotation_frequency'), self.bp.get_attribute('channels'), ' h_angle', sensor_data.horizontal_angle, sensor_data.get_point_count(1))
+            points = np.reshape(points, (int(points.shape[0] / 4), 4))
+            if self.recording:
+                lidar_fname='_out/velodyne/%08d.bin' % sensor_data.frame
+                lidar_pcdfname='_out/velodyne/pcd/%08d.pcd' % sensor_data.frame
+                save_lidar_data(lidar_fname, lidar_pcdfname, points,
+                        "bin")
+            lidar_data = np.array(points[:, :2])
+            lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
+            lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
+            lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
+            lidar_data = lidar_data.astype(np.int32)
+            lidar_data = np.reshape(lidar_data, (-1, 2))
+            lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
+            lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
+            lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
+            self.surface = pygame.surfarray.make_surface(lidar_img)
         return
 
 #================================================================
@@ -1284,7 +1344,7 @@ class CameraManager(object):
 def game_loop(args):
     pygame.init()
     pygame.font.init()
-    world = None
+    sim_world = None
     original_settings = None
 
     try:
@@ -1294,6 +1354,11 @@ def game_loop(args):
         traffic_manager = client.get_trafficmanager()
 
         sim_world = client.get_world()
+
+        if args.map is not None:
+            print('load map %r.' % args.map)
+            sim_world = client.load_world(args.map)
+
         if args.sync:
             original_settings = sim_world.get_settings()
             settings = sim_world.get_settings()
@@ -1314,6 +1379,12 @@ def game_loop(args):
             else:
                 print('set weather preset %r.' % args.weather)
                 sim_world.set_weather(getattr(carla.WeatherParameters, args.weather))
+
+#fps=10 for lidar to have full resolution, do apply_setting after other stuff such as load a new map
+        if args.fps is not None:
+            settings = sim_world.get_settings()
+            settings.fixed_delta_seconds = (1.0 / args.fps) if args.fps > 0.0 else 0.0
+            sim_world.apply_settings(settings)
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -1461,7 +1532,18 @@ def main():
         help='Set the seed for pedestrians module')
     argparser.add_argument(
         '--weather',
+        default='ClearNoon',
         help='set weather preset, use --list to see available presets')
+    argparser.add_argument(
+        '-m', '--map',
+        default='Town01',
+        help='load a new map, use --list to see available maps')
+    argparser.add_argument(
+        '--fps',
+        metavar='N',
+        default=10,
+        type=float,
+        help='set fixed FPS, zero for variable FPS (similar to --delta-seconds)')
 
 
 
