@@ -1266,7 +1266,11 @@ def game_loop(args):
         clock = pygame.time.Clock()
         while True:
             if args.sync:
+                print('args.sync= ', args.sync)
                 sim_world.tick()
+            else:
+                print('args.sync= ', args.sync)
+
             clock.tick_busy_loop(60)
             if controller.parse_events(client, world, clock, args.sync):
                 return

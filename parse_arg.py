@@ -61,6 +61,10 @@ def parse_arg():
         action='store_true',
         help='Activate synchronous mode execution')
     argparser.add_argument(
+        '--save_cam',
+        action='store_true',
+        help='save cam and lidar data')
+    argparser.add_argument(
         '--filterv',
         metavar='PATTERN',
         default='vehicle.*',
@@ -98,6 +102,11 @@ def parse_arg():
         default=0,
         type=int,
         help='Set the seed for pedestrians module')
+    argparser.add_argument(
+        '--lidar_pps',
+        default=56000,
+        type=int,
+        help='Set the lidar point_per_second attribute default 56000')
     argparser.add_argument(
         '--weather',
         default='ClearNoon',

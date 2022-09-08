@@ -2,7 +2,7 @@
 	arldell
 	newamdpc
 
------------ 9/1/22 carla-traing-data migrate to 9.13 ------------------------
+----------- 9/1,7/22 carla-traing-data migrate to 9.13 ------------------------
 python client_bounding_boxes.py --host arldell --res 1024x400
 python client_bounding_boxes.py --host i9lab-wifi --res 1024x400 --weather ClearNoon
 	this now dump lidar data bin and pcl xyzrgb format.
@@ -24,9 +24,13 @@ default lidar setting: 56000 pt/s, 10 hz
 	issue: some scan contain part of the 360 deg. average 3000 pts per pcd file
 	fix: set FPS=10, python config.py --fps=10
 		default 30 fps so get 1/3 of a full resolution since lidar run at 10hz
+	--lidar_pps 560000 to increase # of lidar points by 10 times. much better resolution
 ccb issue:
 	can save both camera and lidar now, but camera frame rate is much lower than lidar
 	also driving control very sluggish
+
+Todo:
+	ccb vehicle movement, hand craft human poses.
 
 ----------- 9.13 config.py ex ------------------------
 config.py control game runtime stuff:

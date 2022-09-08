@@ -47,6 +47,8 @@ import random
 from populate import populate_veh, populate_walkers, populate_walkers_fromfile
 import numpy
 import numpy.random
+from config import clean_vehs
+from carla import ColorConverter as cc
 try:
     import pygame
     from pygame.locals import K_ESCAPE
@@ -242,8 +244,10 @@ class BasicSynchronousClient(object):
         self.display = None
         self.image = None
         self.lidar_img = None
-        self.capture = True
         self.args = args 
+        self.capturelidar = True
+        self.capturecam = True
+
 
     def camera_blueprint(self):
         """
@@ -288,6 +292,8 @@ class BasicSynchronousClient(object):
     def setup_lidar(self):
         bp = self.world.get_blueprint_library().find('sensor.lidar.ray_cast')
         bp.set_attribute('range', '50')
+        bp.set_attribute('points_per_second', str(self.args.lidar_pps))
+        #bp.set_attribute('points_per_second', '560000')
         #bp = world.get_blueprint_library().find('sensor.other.imu')
         bound_x = 0.5 + self.car.bounding_box.extent.x
         bound_y = 0.5 + self.car.bounding_box.extent.y
@@ -313,7 +319,7 @@ class BasicSynchronousClient(object):
         """
 
         camera_transform = carla.Transform(carla.Location(x=-5.5, z=2.8), carla.Rotation(pitch=-15))
-        self.camera = self.world.spawn_actor(self.camera_blueprint(), camera_transform, attach_to=self.car)
+        self.camera = self.world.spawn_actor(self.camera_blueprint(), camera_transform, attach_to=self.car, attachment_type=carla.AttachmentType.Rigid)
         weak_self = weakref.ref(self)
         self.camera.listen(lambda image: weak_self()._parse_image(weak_self, image))
 
@@ -339,14 +345,18 @@ class BasicSynchronousClient(object):
         control = car.get_control()
         control.throttle = 0
         if keys[K_w]:
+            print('w ', keys[K_w])
             control.throttle = 1
             control.reverse = False
         elif keys[K_s]:
+            print('s ', keys[K_w])
             control.throttle = 1
             control.reverse = True
         if keys[K_a]:
+            print('a ', keys[K_w])
             control.steer = max(-1., min(control.steer - 0.05, 0))
         elif keys[K_d]:
+            print('d ', keys[K_w])
             control.steer = min(1., max(control.steer + 0.05, 0))
         else:
             control.steer = 0
@@ -354,25 +364,24 @@ class BasicSynchronousClient(object):
 
         car.apply_control(control)
         return False
-    @staticmethod
-    def _parse_lidar(weak_self, img):
-        points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
-        points = np.reshape(points, (int(points.shape[0] / 4), 4))
-        lidar_data = np.array(points[:, :2])
-        lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
-        lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
-        lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
-        lidar_data = lidar_data.astype(np.int32)
-        lidar_data = np.reshape(lidar_data, (-1, 2))
-        lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
-        lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
-        lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-        #self.lidar_surface = pygame.surfarray.make_surface(lidar_img)
+    #def _parse_lidar(weak_self, img):
+    #    points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
+    #    points = np.reshape(points, (int(points.shape[0] / 4), 4))
+    #    lidar_data = np.array(points[:, :2])
+    #    lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
+    #    lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
+    #    lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
+    #    lidar_data = lidar_data.astype(np.int32)
+    #    lidar_data = np.reshape(lidar_data, (-1, 2))
+    #    lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
+    #    lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
+    #    lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
+    #    self.lidar_surface = pygame.surfarray.make_surface(lidar_img)
 
     @staticmethod
     def _parse_lidar(weak_self, img):
         self = weak_self()
-        print('lidar callback')
+        #print('lidar callback')
         #t_start = self.timer.time()
 
         disp_size = [int(self.args.width), int(self.args.height)]
@@ -392,9 +401,13 @@ class BasicSynchronousClient(object):
         self.lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
 
         self.lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-        lidar_fname='_out/velodyne/%08d.bin' % img.frame
-        lidar_pcdfname='_out/velodyne/pcd/%08d.pcd' % img.frame
-        save_lidar_data(lidar_fname, lidar_pcdfname, points, "bin")
+        self.lidar_surface = pygame.surfarray.make_surface(self.lidar_img)
+        if self.args.save_cam and self.capturelidar:
+            print('lidar save')
+            self.capturelidar = False
+            lidar_fname='_out/velodyne/%08d.bin' % img.frame
+            lidar_pcdfname='_out/velodyne/pcd/%08d.pcd' % img.frame
+            save_lidar_data(lidar_fname, lidar_pcdfname, points, "bin")
         return
 
     @staticmethod
@@ -407,11 +420,16 @@ class BasicSynchronousClient(object):
 
         print('camera callback')
         self = weak_self()
-        if self.capture:
-            self.image = img
-            self.capture = False
-            from carla import ColorConverter as cc
-            img.convert(cc.Raw)
+        self.image = img
+        img.convert(cc.Raw)
+        array = np.frombuffer(self.image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (self.image.height, self.image.width, 4))
+        array = array[:, :, :3]
+        array = array[:, :, ::-1]
+        self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+        if self.args.save_cam and self.capturecam:
+            print('camera save')
+            self.capturecam = False
             print('save camera image: _out/%08d.png' % img.frame)
             img.save_to_disk('_out/%08d' % img.frame)
 
@@ -420,17 +438,12 @@ class BasicSynchronousClient(object):
         Transforms image from camera sensor and blits it to main pygame display.
         """
 
-        if self.image is not None:
-            array = np.frombuffer(self.image.raw_data, dtype=np.dtype("uint8"))
-            array = np.reshape(array, (self.image.height, self.image.width, 4))
-            array = array[:, :, :3]
-            array = array[:, :, ::-1]
-            surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
-            display.blit(surface, (0, 0))
+        if self.surface is not None:
+            display.blit(self.surface, (0, 0))
 
-        if self.lidar_img is not None:
-            lidar_surface = pygame.surfarray.make_surface(self.lidar_img)
-            display.blit(lidar_surface, (0, int(self.args.height)))
+        if self.lidar_surface is not None:
+        #    self.lidar_surface = pygame.surfarray.make_surface(self.lidar_img)
+            display.blit(self.lidar_surface, (0, int(self.args.height)))
 
     def game_loop(self):
         """
@@ -449,6 +462,8 @@ class BasicSynchronousClient(object):
                 print('load map %r.' % self.args.map)
                 self.world = self.client.load_world(self.args.map)
 
+            if self.args.ic:
+                clean_vehs(self.args, self.client)
 
             self.traffic_manager = self.client.get_trafficmanager()
 
@@ -481,12 +496,19 @@ class BasicSynchronousClient(object):
 
             self.set_synchronous_mode(True)
             vehicles = self.world.get_actors().filter('vehicle.*')
+            if self.args.sync:
+                self.world.tick()
+            else:
+                self.world.wait_for_tick()
 
             while True:
+                if self.args.sync:
+                    print('args.sync= ', self.args.sync)
                 self.world.tick()
 
-                self.capture = True
-                pygame_clock.tick_busy_loop(20)
+                self.capturecam = True
+                self.capturelidar = True
+                pygame_clock.tick_busy_loop(60)
 
                 self.render(self.display)
                 bounding_boxes = ClientSideBoundingBoxes.get_bounding_boxes(vehicles, self.camera)
