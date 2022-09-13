@@ -54,6 +54,7 @@ def get_actor_blueprints(world, filter, generation):
         print("   Warning! Actor Generation is not valid. No actor will be spawned.")
         return []
 
+#filterv='vehicle.*'
 def populate_veh(client, world, traffic_manager, filterv, generationv, number_of_vehicles, synchronous_master):
         vehicles_list = []
         all_id = []
@@ -114,6 +115,7 @@ def read_walkerlistfile(fname):
     walker_listfromfile = genfromtxt(fname, delimiter=',')
     return walker_listfromfile
 
+#filterw='walker.pedestrian.*'
 def populate_walkers_fromfile(client, world, traffic_manager, filterw, generationw, asynchflag, number_of_walkers, seedw,synchronous_master, playerlocation):
         if playerlocation==None:
             print('populate walkers fixed')
@@ -177,7 +179,7 @@ def populate_walkers(client, world, traffic_manager, filterw, generationw, async
                 print('spawn walker rand', loc)
             else:
                 loc = world.get_random_location_from_navigation()
-                loc.x = random.rand()*4 + playerlocation.location.x + 20
+                loc.x = random.rand()*4 + playerlocation.location.x +5 
                 loc.y = random.rand()*4 + playerlocation.location.y 
                 print('spawn walker at', loc)
                 #loc.location.z = random.rand*5 + loc.location.z

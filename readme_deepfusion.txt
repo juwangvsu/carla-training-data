@@ -2,7 +2,44 @@
 	arldell
 	newamdpc
 
+------------9/10/22 _out/calib/ lidar-cam caliberation fixed ----------------
+LDLS works well with the new calib parameter below:
+0000026.txt:
+	parameters needed to project lidar points from lidar frame to camera plan
+	P2 is the projection matrix
+	Tr_velo_to_cam transform matrix from lidar frame to cam frame
+
+	for lidar point p=(x,y,z,1) in lidar frame, p_c the same point
+		at camera frame, p =(x_i, y_i) image plane coordinate 
+	p_c = Tr_velo_to_cam * p
+
+	p_2 = P2*p_c
+	x_i = p_2[0]/p_2[2] # normalize diving by z
+	y_i = p_2[1]/p_2[2]
+	
+	relationship between lidar frame and camera frame see kitti document,
+	lidar frame:
+			 z
+			 | x
+		     y __|/
+
+	cam frame:a       z
+			 /
+			/____x
+			|
+			|
+			y
+	the original kitti caliberation param is not good for carla simulation data
+	due to camera model difference. especially P2.
+	The correct P2 is calculated from the camera parameter as following:
+		f = 1238/2
+		c_u = 1238/(2* tan(fov*pi/360)=619
+		c_u = 384/(2* tan(fov*pi/360)=192
+ 
 ----------- 9/1,7/22 carla-traing-data migrate to 9.13 ------------------------
+	use visualize_multiple_sensors2.py, ditch ccb 
+python visualize_multiple_sensors2.py --host arldell --camera_resx 1238 
+
 python client_bounding_boxes.py --host arldell --res 1024x400
 python client_bounding_boxes.py --host i9lab-wifi --res 1024x400 --weather ClearNoon
 	this now dump lidar data bin and pcl xyzrgb format.
@@ -31,6 +68,8 @@ ccb issue:
 
 Todo:
 	ccb vehicle movement, hand craft human poses.
+	lidar frame # and cam frame # not synced since the sensor trigger rate 
+		are different. add a sync mode?
 
 ----------- 9.13 config.py ex ------------------------
 config.py control game runtime stuff:

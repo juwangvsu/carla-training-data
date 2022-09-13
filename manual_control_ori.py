@@ -1107,6 +1107,7 @@ class CameraManager(object):
                 if bp.has_attribute('gamma'):
                     bp.set_attribute('gamma', str(gamma_correction))
                 for attr_name, attr_value in item[3].items():
+                    print(bp, attr_name, attr_value)
                     bp.set_attribute(attr_name, attr_value)
             elif item[0].startswith('sensor.lidar'):
                 self.lidar_range = 50
@@ -1117,6 +1118,7 @@ class CameraManager(object):
                         self.lidar_range = float(attr_value)
 
             item.append(bp)
+            print(bp)
         self.index = None
 
     def toggle_camera(self):
@@ -1153,6 +1155,7 @@ class CameraManager(object):
 
     def render(self, display):
         if self.surface is not None:
+            print('render cam')
             display.blit(self.surface, (0, 0))
 
     @staticmethod
@@ -1199,6 +1202,7 @@ class CameraManager(object):
             array = array[:, :, ::-1]
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         else:
+            print('cam callback ', self.sensors[self.index][1])
             image.convert(self.sensors[self.index][1])
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
@@ -1266,10 +1270,7 @@ def game_loop(args):
         clock = pygame.time.Clock()
         while True:
             if args.sync:
-                print('args.sync= ', args.sync)
                 sim_world.tick()
-            else:
-                print('args.sync= ', args.sync)
 
             clock.tick_busy_loop(60)
             if controller.parse_events(client, world, clock, args.sync):

@@ -34,8 +34,8 @@ def parse_arg():
     argparser.add_argument(
         '--res',
         metavar='WIDTHxHEIGHT',
-        default='1280x720',
-        help='window resolution (default: 1238x374)')
+        default='1238x374',
+        help='cam window resolution 1238x374 (kitti)')
     argparser.add_argument(
         '--filter',
         metavar='PATTERN',
@@ -64,6 +64,16 @@ def parse_arg():
         '--save_cam',
         action='store_true',
         help='save cam and lidar data')
+    argparser.add_argument(
+        '-cxr', '--camera_resx',
+        default=600,
+        type=int,
+        help='camera x res, default 600')
+    argparser.add_argument(
+        '-fov', '--fov',
+        default=90,
+        type=int,
+        help='camera fov, default 90')
     argparser.add_argument(
         '--filterv',
         metavar='PATTERN',

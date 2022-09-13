@@ -109,6 +109,11 @@ def clean_vehs(args, client):
     print(sensors)
     client.apply_batch([carla.command.DestroyActor(x) for x in sensors])
 
+    filterw='walker.pedestrian.*'
+    sensors= actors.filter(filterw)
+    print(sensors)
+    client.apply_batch([carla.command.DestroyActor(x) for x in sensors])
+
 def inspect(args, client):
     address = '%s:%d' % (get_ip(args.host), args.port)
 

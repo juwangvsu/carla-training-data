@@ -57,6 +57,7 @@ try:
     from pygame.locals import K_d
     from pygame.locals import K_s
     from pygame.locals import K_w
+    from pygame.locals import K_BACKSPACE
 except ImportError:
     raise RuntimeError('cannot import pygame, make sure pygame package is installed')
 
@@ -244,6 +245,8 @@ class BasicSynchronousClient(object):
         self.display = None
         self.image = None
         self.lidar_img = None
+        self.lidar_surface = None
+        self.surface = None
         self.args = args 
         self.capturelidar = True
         self.capturecam = True
@@ -321,7 +324,8 @@ class BasicSynchronousClient(object):
         camera_transform = carla.Transform(carla.Location(x=-5.5, z=2.8), carla.Rotation(pitch=-15))
         self.camera = self.world.spawn_actor(self.camera_blueprint(), camera_transform, attach_to=self.car, attachment_type=carla.AttachmentType.Rigid)
         weak_self = weakref.ref(self)
-        self.camera.listen(lambda image: weak_self()._parse_image(weak_self, image))
+        #self.camera.listen(lambda image: weak_self()._parse_image(weak_self, image))
+        self.camera.listen(lambda image: BasicSynchronousClient._parse_image(weak_self, image))
 
         calibration = np.identity(3)
         calibration[0, 2] = self.args.width / 2.0
@@ -331,7 +335,30 @@ class BasicSynchronousClient(object):
         #calibration[1, 2] = VIEW_HEIGHT / 2.0
         #calibration[0, 0] = calibration[1, 1] = VIEW_WIDTH / (2.0 * np.tan(VIEW_FOV * np.pi / 360.0))
         self.camera.calibration = calibration
+    #################################################################33
+    ## another way to process key and pygame events
+    def parse_events(self, car):
+        control = car.get_control()
+        control.throttle = 0
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return True
+            elif event.type == pygame.KEYUP:
+                if event.key == K_BACKSPACE:
+                    car.set_autopilot(False)
+                    #world.restart()
+                    car.set_autopilot(True)
+                elif event.key == K_w:
+                    print('w ', K_w)
+                    control.throttle = 1
+                    control.reverse = False
+                elif event.key == K_s:
+                    print('s ', K_s)
+                    control.throttle = 1
+                    control.reverse = True
+        car.apply_control(control)
 
+    #################################################################33
     def control(self, car):
         """
         Applies control to main car based on pygame pressed keys.
@@ -341,7 +368,6 @@ class BasicSynchronousClient(object):
         keys = pygame.key.get_pressed()
         if keys[K_ESCAPE]:
             return True
-
         control = car.get_control()
         control.throttle = 0
         if keys[K_w]:
@@ -380,6 +406,7 @@ class BasicSynchronousClient(object):
 
     @staticmethod
     def _parse_lidar(weak_self, img):
+        #return
         self = weak_self()
         #print('lidar callback')
         #t_start = self.timer.time()
@@ -417,9 +444,12 @@ class BasicSynchronousClient(object):
         The self.capture flag is a mean of synchronization - once the flag is
         set, next coming image will be stored.
         """
-
-        print('camera callback')
         self = weak_self()
+        if not self:
+            return
+        if not img.frame%5==0:
+            return
+        print('camera callback ', img.frame)
         self.image = img
         img.convert(cc.Raw)
         array = np.frombuffer(self.image.raw_data, dtype=np.dtype("uint8"))
@@ -439,9 +469,12 @@ class BasicSynchronousClient(object):
         """
 
         if self.surface is not None:
+            print('render cam...')
             display.blit(self.surface, (0, 0))
+            self.surface=None
 
         if self.lidar_surface is not None:
+            print('render lidar...')
         #    self.lidar_surface = pygame.surfarray.make_surface(self.lidar_img)
             display.blit(self.lidar_surface, (0, int(self.args.height)))
 
@@ -452,6 +485,7 @@ class BasicSynchronousClient(object):
 
         try:
             pygame.init()
+            pygame.font.init()
             print('host is" ', self.args.host)
             self.client = carla.Client(self.args.host, 2000)
             self.client.set_timeout(10.0)
@@ -481,6 +515,9 @@ class BasicSynchronousClient(object):
 
             self.display = pygame.display.set_mode((self.args.width, 2*self.args.height), pygame.HWSURFACE | pygame.DOUBLEBUF)
             #self.display = pygame.display.set_mode((VIEW_WIDTH, VIEW_HEIGHT), pygame.HWSURFACE | pygame.DOUBLEBUF)
+            self.display.fill((0,0,0))
+            pygame.display.flip()
+
             spectator = self.world.get_spectator()
             print('spectator: ', spectator)
             spec_trans = self.car.get_transform()
@@ -494,31 +531,35 @@ class BasicSynchronousClient(object):
 
             pygame_clock = pygame.time.Clock()
 
-            self.set_synchronous_mode(True)
+            self.set_synchronous_mode(False) # if set true, this require the main loop to call world.tick() to drive the game
             vehicles = self.world.get_actors().filter('vehicle.*')
             if self.args.sync:
                 self.world.tick()
             else:
                 self.world.wait_for_tick()
+            self._server_clock = pygame.time.Clock()
 
             while True:
                 if self.args.sync:
                     print('args.sync= ', self.args.sync)
-                self.world.tick()
+                    self.world.tick()
 
                 self.capturecam = True
                 self.capturelidar = True
-                pygame_clock.tick_busy_loop(60)
+                pygame_clock.tick_busy_loop(20)
 
-                self.render(self.display)
-                bounding_boxes = ClientSideBoundingBoxes.get_bounding_boxes(vehicles, self.camera)
-                ClientSideBoundingBoxes.draw_bounding_boxes(self.display, bounding_boxes, self.args.width, self.args.height)
-
-                pygame.display.flip()
-
-                pygame.event.pump()
                 if self.control(self.car):
                     return
+                self.render(self.display)
+                #bounding_boxes = ClientSideBoundingBoxes.get_bounding_boxes(vehicles, self.camera)
+                #ClientSideBoundingBoxes.draw_bounding_boxes(self.display, bounding_boxes, self.args.width, self.args.height)
+
+                pygame.display.flip()
+            #    self._server_clock = pygame.time.Clock()
+            #    self._server_clock.tick()
+                pygame.event.pump()
+                #if self.control(self.car):
+                #    return
 
         finally:
             self.set_synchronous_mode(False)
